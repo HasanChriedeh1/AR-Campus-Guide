@@ -19,6 +19,8 @@ const LOCATION_OPTIONS: PositionOptions = { enableHighAccuracy: true, maximumAge
 const POLLED_LOCATION_OPTIONS: PositionOptions = { enableHighAccuracy: true, maximumAge: 0, timeout: 4_000 }
 const GPS_LOCK_ACCURACY_METERS = 50
 const COMPASS_STALE_AFTER_MS = 1_500
+const COMPASS_RENDER_INTERVAL_MS = 50
+const COMPASS_JITTER_DEAD_ZONE_DEGREES = 1.5
 const COURSE_STALE_AFTER_MS = 5_000
 const LOCATION_POLL_INTERVAL_MS = 1_250
 const ALIGNED_THRESHOLD_DEGREES = 15
@@ -74,7 +76,7 @@ type DeviceOrientationConstructor = typeof DeviceOrientationEvent & {
   requestPermission?: (absolute?: boolean) => Promise<'granted' | 'denied'>
 }
 
-function Guide({ destination, camera, setCamera }: { destination: NavigationDestination; camera: boolean; setCamera: (value: boolean) => void }) {
+function Guide({ destination: defaultDestination, camera, setCamera }: { destination: NavigationDestination; camera: boolean; setCamera: (value: boolean) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const watchIdRef = useRef<number | null>(null)
   const locationPollRef = useRef<number | null>(null)
@@ -84,6 +86,7 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
   const compassTimeoutRef = useRef<number | null>(null)
   const headingRef = useRef<LiveHeading | null>(null)
   const latestCourseHeadingRef = useRef<LiveHeading | null>(null)
+  const lastCompassSampleAtRef = useRef(0)
   const displayRotationRef = useRef<number | null>(null)
   const arrowIconRef = useRef<SVGSVGElement>(null)
   const arrivalFixesRef = useRef(0)
@@ -96,8 +99,35 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
   const [arrivalFixes, setArrivalFixes] = useState(0)
   const [cameraError, setCameraError] = useState('')
   const [cameraAttempt, setCameraAttempt] = useState(0)
+  const [destination, setDestination] = useState(defaultDestination)
+  const [showCoordinateForm, setShowCoordinateForm] = useState(false)
+  const [customCoordinate, setCustomCoordinate] = useState({ lat: '', lng: '' })
+  const [coordinateError, setCoordinateError] = useState('')
   const route: CampusWalkingRoute | null = null
   const guidance = useMemo(() => position ? getNavigationGuidance(position, destination, route) : null, [destination, position, route])
+
+  const applyCustomCoordinate = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const lat = Number(customCoordinate.lat)
+    const lng = Number(customCoordinate.lng)
+    if (!customCoordinate.lat.trim() || !customCoordinate.lng.trim() || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+      setCoordinateError('Enter a valid latitude and longitude.')
+      return
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      setCoordinateError('Latitude must be between −90 and 90; longitude between −180 and 180.')
+      return
+    }
+    setDestination({ id: 'custom-coordinate', label: 'Custom coordinate', coordinate: { lat, lng } })
+    setCoordinateError('')
+    setShowCoordinateForm(false)
+  }
+
+  const useDefaultDestination = () => {
+    setDestination(defaultDestination)
+    setCoordinateError('')
+    setShowCoordinateForm(false)
+  }
 
   const clearCompassTimeout = useCallback(() => {
     if (compassTimeoutRef.current !== null) {
@@ -136,15 +166,32 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
     const current = headingRef.current
     const updatedAt = Date.now()
     const normalized = normalizeDegrees(degrees)
+    if (source === 'compass') lastCompassSampleAtRef.current = updatedAt
+
+    if (source === 'compass' && current?.source === 'compass') {
+      const change = signedRelativeBearing(normalized, current.degrees)
+      const changeMagnitude = Math.abs(change)
+      const tooSoonForAnotherSmallUpdate = updatedAt - current.updatedAt < COMPASS_RENDER_INTERVAL_MS
+        && changeMagnitude < 12
+
+      // iPhone compass events contain small, high-frequency fluctuations even
+      // when the phone is held still. Do not send that noise to the arrow.
+      if (changeMagnitude < COMPASS_JITTER_DEAD_ZONE_DEGREES || tooSoonForAnotherSmallUpdate) return
+    }
+
     const sourcePrevious = source === 'course'
       ? latestCourseHeadingRef.current?.degrees ?? null
       : current?.source === 'compass' ? current.degrees : null
-    const next = { degrees: smoothHeading(sourcePrevious, normalized, 0.45), source, updatedAt }
+    const changeMagnitude = sourcePrevious === null ? Number.POSITIVE_INFINITY : Math.abs(signedRelativeBearing(normalized, sourcePrevious))
+    const smoothingAmount = source === 'course'
+      ? 0.25
+      : changeMagnitude < 8 ? 0.14 : changeMagnitude < 35 ? 0.25 : 0.45
+    const next = { degrees: smoothHeading(sourcePrevious, normalized, smoothingAmount), source, updatedAt }
 
     if (source === 'course') latestCourseHeadingRef.current = next
     // A compass reading should win while it is arriving, but a stale reading
     // must not freeze the arrow when GPS has a fresh travel direction.
-    if (source === 'course' && current?.source === 'compass' && updatedAt - current.updatedAt < COMPASS_STALE_AFTER_MS) return
+    if (source === 'course' && current?.source === 'compass' && updatedAt - lastCompassSampleAtRef.current < COMPASS_STALE_AFTER_MS) return
     headingRef.current = next
     setHeading(next)
   }, [])
@@ -152,6 +199,7 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
   const armCompassFreshnessWatchdog = useCallback(() => {
     clearCompassTimeout()
     compassTimeoutRef.current = window.setTimeout(() => {
+      lastCompassSampleAtRef.current = 0
       const course = latestCourseHeadingRef.current
       if (course && Date.now() - course.updatedAt <= COURSE_STALE_AFTER_MS) {
         headingRef.current = course
@@ -279,6 +327,7 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
 
   const requestCompass = useCallback(async (session: number) => {
     stopCompassTracking()
+    lastCompassSampleAtRef.current = 0
     if (!window.isSecureContext) {
       setCompassState('unavailable')
       return
@@ -330,6 +379,7 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
     navigationSessionRef.current = session
     headingRef.current = null
     latestCourseHeadingRef.current = null
+    lastCompassSampleAtRef.current = 0
     latestPositionRef.current = null
     displayRotationRef.current = null
     arrivalFixesRef.current = 0
@@ -479,7 +529,7 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
     )
   }
 
-  return <div className="view"><div className="guide-hero route-hero"><div className="grid-pattern" /><div className="guide-copy"><div className="eyebrow light"><i />Campus Guide / Live guidance</div><h1>Your position<br /><em>to Point B.</em></h1><p>Use your live location and compass to point directly to the BIOM502 class at Student Parking.</p></div><div className="route-orbit"><Target size={24} /><span>C</span><i /><span>B</span></div></div><div className="route-summary"><div className="route-point"><span className="point-pin start-pin">C</span><div><small>CURRENT POSITION</small><b>{position ? 'Your live location' : 'Live location not acquired'}</b><em>{position ? `${position.lat.toFixed(4)}, ${position.lng.toFixed(4)} · ±${Math.round(position.accuracy)} m` : 'Start camera navigation for a fresh GPS position'}</em></div></div><ArrowRight className="route-line" size={18} /><div className="route-point"><span className="point-pin end-pin">B</span><div><small>DESTINATION</small><b>{destination.label}</b><em>{destination.coordinate.lat.toFixed(4)}, {destination.coordinate.lng.toFixed(4)}</em></div></div></div><div className="route-metrics"><div><span>Distance</span><b>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</b></div><div><span>Direction</span><b>{guidance ? `${Math.round(guidance.bearing)}°` : '—'}</b></div><div><span>Route status</span><b className={`location-state ${locationState === 'unavailable' || locationState === 'denied' || locationState === 'error' ? 'unavailable' : ''}`}>{locationLabel}</b></div></div><div className="route-actions"><button className="primary" onClick={startNavigation}><Camera size={15} />Start camera route <ArrowRight size={15} /></button><button className="outline" onClick={requestSingleLocation}><LocateFixed size={15} />{locationState === 'acquiring' ? 'Locating...' : 'Use live location'}</button></div><div className="footnote"><CircleAlert size={15} />Guidance points directly to Student Parking today. Campus walking routes can later provide the same camera overlay with path-aware turns.</div></div>
+  return <div className="view"><div className="guide-hero route-hero"><div className="grid-pattern" /><div className="guide-copy"><div className="eyebrow light"><i />Campus Guide / Live guidance</div><h1>Your position<br /><em>to your destination.</em></h1><p>Use your live location and compass to point directly to Student Parking or a coordinate you enter.</p></div><div className="route-orbit"><Target size={24} /><span>C</span><i /><span>B</span></div></div><div className="route-summary"><div className="route-point"><span className="point-pin start-pin">C</span><div><small>CURRENT POSITION</small><b>{position ? 'Your live location' : 'Live location not acquired'}</b><em>{position ? `${position.lat.toFixed(4)}, ${position.lng.toFixed(4)} · ±${Math.round(position.accuracy)} m` : 'Start camera navigation for a fresh GPS position'}</em></div></div><ArrowRight className="route-line" size={18} /><div className="route-point"><span className="point-pin end-pin">B</span><div><small>DESTINATION</small><b>{destination.label}</b><em>{destination.coordinate.lat.toFixed(4)}, {destination.coordinate.lng.toFixed(4)}</em></div></div></div><section className="custom-coordinate panel"><div><span className="section-label">CUSTOM DESTINATION</span><b>Navigate to another coordinate</b><small>Enter decimal latitude and longitude.</small></div><div className="coordinate-controls"><button className="outline" type="button" aria-expanded={showCoordinateForm} onClick={() => { setShowCoordinateForm(value => !value); setCoordinateError('') }}><Plus size={15} />{showCoordinateForm ? 'Close' : 'Add custom coordinate'}</button>{destination.id === 'custom-coordinate' && <button className="text-button" type="button" onClick={useDefaultDestination}>Use Student Parking</button>}</div>{showCoordinateForm && <form className="coordinate-form" onSubmit={applyCustomCoordinate} noValidate><label>Latitude<input aria-label="Latitude" inputMode="decimal" placeholder="33.713146" value={customCoordinate.lat} onChange={event => setCustomCoordinate(value => ({ ...value, lat: event.target.value }))} /></label><label>Longitude<input aria-label="Longitude" inputMode="decimal" placeholder="35.482796" value={customCoordinate.lng} onChange={event => setCustomCoordinate(value => ({ ...value, lng: event.target.value }))} /></label><button className="small-primary" type="submit">Use coordinate</button>{coordinateError && <p className="coordinate-error" role="alert">{coordinateError}</p>}</form>}</section><div className="route-metrics"><div><span>Distance</span><b>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</b></div><div><span>Direction</span><b>{guidance ? `${Math.round(guidance.bearing)}°` : '—'}</b></div><div><span>Route status</span><b className={`location-state ${locationState === 'unavailable' || locationState === 'denied' || locationState === 'error' ? 'unavailable' : ''}`}>{locationLabel}</b></div></div><div className="route-actions"><button className="primary" onClick={startNavigation}><Camera size={15} />Start camera route <ArrowRight size={15} /></button><button className="outline" onClick={requestSingleLocation}><LocateFixed size={15} />{locationState === 'acquiring' ? 'Locating...' : 'Use live location'}</button></div><div className="footnote"><CircleAlert size={15} />Guidance points directly to the selected coordinate. Campus walking routes can later provide the same camera overlay with path-aware turns.</div></div>
 }
 
 function headingFromEvent(event: DeviceOrientationEvent) {
