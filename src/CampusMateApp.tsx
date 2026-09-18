@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Bot, CalendarDays, Camera, ChevronDown, CircleAlert, Compass, CornerDownRight, Edit3, LayoutDashboard, LocateFixed, MapPin, Navigation, Plus, RefreshCw, RotateCcw, Send, Sparkles, Target, Trash2, X } from 'lucide-react'
-import { fetchSchedule } from './services/scheduleApi'
 import type { DayName, Enrollment, Meeting, ScheduleResponse } from './types'
 import './campus.css'
 import './campus-route.css'
@@ -12,6 +11,13 @@ const COLORS = ['coral','cyan','lime','violet','amber','blue','pink']
 const CAMPUS_POINTS = {
   start: { label: 'Point A · Main Entrance', lat: 33.71489303771598, lng: 35.467942007882115 },
   studentParking: { label: 'Student Parking · Point B', lat: 33.71314599891659, lng: 35.48279627287705 },
+}
+const DEMO_SCHEDULE: ScheduleResponse = {
+  semester: 'Fall 2026–27',
+  enrolledCourses: [{ course: 'BIOM502', section: '1' }],
+  totalMeetings: 1,
+  timetable: [{ course: 'BIOM502', section: '1', title: 'Biomedical Instrumentation', day: 'Monday', start: '09:00', end: '10:30', room: 'Student Parking · Point B', status: 'scheduled' }],
+  missingCourses: [],
 }
 type View = 'dashboard' | 'schedule' | 'edit' | 'guide' | 'assistant'
 const nav = [{ id: 'dashboard' as View, label: 'Overview', icon: LayoutDashboard }, { id: 'schedule' as View, label: 'My schedule', icon: CalendarDays }, { id: 'edit' as View, label: 'Edit schedule', icon: Edit3 }, { id: 'guide' as View, label: 'Campus Guide', icon: Compass }, { id: 'assistant' as View, label: 'AI assistant', icon: Bot }]
@@ -25,22 +31,20 @@ export default function CampusMateApp() {
   const [courses, setCourses] = useState<Enrollment>(() => ({ course: '', section: '' }))
   const [enrollments, setEnrollments] = useState<Enrollment[]>(() => { const saved = localStorage.getItem('campusmate-enrollments'); return saved ? JSON.parse(saved) : DEMO })
   const [original] = useState(DEMO)
-  const [data, setData] = useState<ScheduleResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [data] = useState<ScheduleResponse>(DEMO_SCHEDULE)
+  const [loading] = useState(false)
+  const [error] = useState('')
   const [day, setDay] = useState<DayName>(today())
   const [selected, setSelected] = useState<Meeting | null>(null)
   const [destination, setDestination] = useState('Student Parking')
   const [camera, setCamera] = useState(false)
-  const load = async (items = enrollments) => { setLoading(true); setError(''); try { setData(await fetchSchedule(items)) } catch (err) { setData(null); setError(err instanceof Error ? err.message : 'Unable to reach the schedule service.') } finally { setLoading(false) } }
-  useEffect(() => { void load() }, [])
   useEffect(() => { localStorage.setItem('campusmate-enrollments', JSON.stringify(enrollments)) }, [enrollments])
   const meetings = data?.timetable ?? []
   const next = useMemo(() => { const now = new Date(); const todayIndex = now.getDay() === 0 ? 0 : now.getDay() - 1; const nowMin = now.getHours() * 60 + now.getMinutes(); const sorted = meetings.filter(m => m.day && m.start).sort((a, b) => ((DAYS.indexOf(a.day as DayName) - todayIndex + 5) % 5) * 1440 + (minutes(a.start) ?? 0) - (((DAYS.indexOf(b.day as DayName) - todayIndex + 5) % 5) * 1440 + (minutes(b.start) ?? 0))); return sorted.find(m => { const distance = (DAYS.indexOf(m.day as DayName) - todayIndex + 5) % 5; return distance > 0 || (distance === 0 && (minutes(m.start) ?? 0) >= nowMin) }) ?? sorted[0] ?? null }, [meetings])
-  const status = <Status loading={loading} error={error} retry={() => void load()} />
+  const status = <Status loading={loading} error={error} retry={() => undefined} />
   const edit = (items: Enrollment[]) => setEnrollments(items.filter(item => item.course.trim()))
-  const content = view === 'dashboard' ? <Dashboard meetings={meetings.filter(m => m.day === today())} next={next} loading={loading} error={error} retry={() => void load()} go={setView} /> : view === 'schedule' ? <Schedule meetings={meetings} day={day} setDay={setDay} select={setSelected} status={status} /> : view === 'edit' ? <Editor items={enrollments} original={original} onChange={edit} add={courses} setAdd={setCourses} save={() => void load()} restore={() => { edit(original); void load(original) }} status={status} /> : view === 'guide' ? <Guide destination={destination} setDestination={setDestination} camera={camera} setCamera={setCamera} /> : <Assistant />
-  return <div className="app-shell"><aside className="sidebar"><Brand /><div className="workspace-label">RHU / Fall 2026–27</div><nav>{nav.map(({ id, label, icon: Icon }) => <button className={`nav-item ${view === id ? 'active' : ''}`} key={id} onClick={() => setView(id)}><Icon size={18} />{label}{id === 'assistant' && <i className="soon-dot" />}</button>)}</nav><div className="sidebar-bottom"><div className="profile"><span className="avatar">SA</span><span><b>Student account</b><small>Demo profile</small></span><ChevronDown size={14} /></div><div className="api-status"><i className={`status-dot ${error ? 'offline' : ''}`} />Schedule API {error ? 'offline' : 'connected'}</div></div></aside><main><header className="topbar"><Brand compact /><div className="breadcrumbs"><span>Rafik Hariri University</span><CornerDownRight size={14} /><b>{nav.find(item => item.id === view)?.label}</b></div><span className="avatar mobile-avatar">SA</span></header><div className="page-wrap">{content}</div></main><nav className="mobile-nav">{nav.slice(0, 4).map(({ id, icon: Icon }) => <button className={view === id ? 'active' : ''} key={id} onClick={() => setView(id)}><Icon size={18} /><span>{id === 'schedule' ? 'Schedule' : id === 'edit' ? 'Edit' : id === 'guide' ? 'Campus Guide' : 'Overview'}</span></button>)}</nav>{selected && <Modal meeting={selected} close={() => setSelected(null)} />}</div>
+  const content = view === 'dashboard' ? <Dashboard meetings={meetings.filter(m => m.day === today())} next={next} loading={loading} error={error} retry={() => undefined} go={setView} /> : view === 'schedule' ? <Schedule meetings={meetings} day={day} setDay={setDay} select={setSelected} status={status} /> : view === 'edit' ? <Editor items={enrollments} original={original} onChange={edit} add={courses} setAdd={setCourses} save={() => undefined} restore={() => edit(original)} status={status} /> : view === 'guide' ? <Guide destination={destination} setDestination={setDestination} camera={camera} setCamera={setCamera} /> : <Assistant />
+  return <div className="app-shell"><aside className="sidebar"><Brand /><div className="workspace-label">RHU / Fall 2026–27</div><nav>{nav.map(({ id, label, icon: Icon }) => <button className={`nav-item ${view === id ? 'active' : ''}`} key={id} onClick={() => setView(id)}><Icon size={18} />{label}{id === 'assistant' && <i className="soon-dot" />}</button>)}</nav><div className="sidebar-bottom"><div className="profile"><span className="avatar">SA</span><span><b>Student account</b><small>Demo profile</small></span><ChevronDown size={14} /></div><div className="api-status"><i className="status-dot" />Demo schedule</div></div></aside><main><header className="topbar"><Brand compact /><div className="breadcrumbs"><span>Rafik Hariri University</span><CornerDownRight size={14} /><b>{nav.find(item => item.id === view)?.label}</b></div><span className="avatar mobile-avatar">SA</span></header><div className="page-wrap">{content}</div></main><nav className="mobile-nav">{nav.slice(0, 4).map(({ id, icon: Icon }) => <button className={view === id ? 'active' : ''} key={id} onClick={() => setView(id)}><Icon size={18} /><span>{id === 'schedule' ? 'Schedule' : id === 'edit' ? 'Edit' : id === 'guide' ? 'Campus Guide' : 'Overview'}</span></button>)}</nav>{selected && <Modal meeting={selected} close={() => setSelected(null)} />}</div>
 }
 
 function Brand({ compact = false }: { compact?: boolean }) { return <div className={compact ? 'brand compact-brand' : 'brand'}><span className="brand-mark"><Sparkles size={16} /></span>Campus<span className="accent">Mate</span></div> }
@@ -52,8 +56,8 @@ function ScheduleBlock({ meeting, select }: { meeting: Meeting; select: (meeting
 function Editor({ items, original, onChange, add, setAdd, save, restore, status }: { items: Enrollment[]; original: Enrollment[]; onChange: (items: Enrollment[]) => void; add: Enrollment; setAdd: (item: Enrollment) => void; save: () => void; restore: () => void; status: React.ReactNode }) { return <div className="view"><Heading eyebrow="Personal planning tool" title={<>Shape your <em>week.</em></>} description="Adjust your plan without touching official registration." action={<button className="outline" onClick={restore}><RotateCcw size={15} />Restore original</button>} />{status}<div className="edit-layout"><section className="panel edit-list"><div className="panel-heading"><div><div className="section-label">PLANNING COURSES</div><h2>{items.length} <span>courses selected</span></h2></div><b className="badge">DEMO PROFILE</b></div>{items.map((item, index) => <div className="edit-row" key={`${item.course}-${index}`}><i className={`course-index ${color(item.course)}`}>{String(index + 1).padStart(2,'0')}</i><span><b>{item.course}</b><small>Demo enrollment</small></span><label>Section<input value={item.section} onChange={e => onChange(items.map((row, i) => i === index ? { ...row, section: e.target.value } : row))} /></label><button className="remove" onClick={() => onChange(items.filter((_, i) => i !== index))}><Trash2 size={15} /></button></div>)}<div className="add-row"><Plus size={16} /><input placeholder="Course code" value={add.course} onChange={e => setAdd({ ...add, course: e.target.value.toUpperCase() })} /><input className="section-input" placeholder="Sec." value={add.section} onChange={e => setAdd({ ...add, section: e.target.value })} /><button className="small-primary" onClick={() => { if (add.course.trim()) { onChange([...items, { course: add.course.trim(), section: add.section || '1' }]); setAdd({ course: '', section: '' }) } }}>Add</button></div><div className="edit-actions"><button className="primary" onClick={save}><RefreshCw size={15} />Generate updated timetable</button><span>Changes are saved locally for this demo.</span></div></section><aside className="edit-note"><CircleAlert size={18} /><h3>A planning layer, not registration.</h3><p>CampusMate sends course codes and sections to the existing schedule service to preview a personal timetable. It never changes official RHU enrollment.</p><hr /><strong>{original.length}</strong><small>original courses</small></aside></div></div> }
 function Guide({ destination, setDestination, camera, setCamera }: { destination: string; setDestination: (value: string) => void; camera: boolean; setCamera: (value: boolean) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const [position, setPosition] = useState<GeoPoint | null>(null)
-  const [locationState, setLocationState] = useState<'locating' | 'live' | 'unavailable'>('locating')
+  const [position, setPosition] = useState<GeoPoint>(CAMPUS_POINTS.start)
+  const [locationState, setLocationState] = useState<'demo' | 'locating' | 'live'>('demo')
   const [cameraError, setCameraError] = useState('')
   const [heading, setHeading] = useState<number | null>(null)
   const destinationPoint = CAMPUS_POINTS.studentParking
@@ -76,16 +80,13 @@ function Guide({ destination, setDestination, camera, setCamera }: { destination
   }, [camera])
 
   useEffect(() => {
-    if (!navigator.geolocation) {
-      setLocationState('unavailable')
-      return
-    }
+    if (!navigator.geolocation) return
 
     setLocationState('locating')
     const watchId = navigator.geolocation.watchPosition(({ coords }) => {
       setPosition({ label: 'Point C · Your current position', lat: coords.latitude, lng: coords.longitude })
       setLocationState('live')
-    }, () => setLocationState('unavailable'), { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 })
+    }, () => setLocationState('demo'), { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 })
 
     const updateHeading = (event: DeviceOrientationEvent) => {
       const compassHeading = (event as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading
@@ -103,12 +104,12 @@ function Guide({ destination, setDestination, camera, setCamera }: { destination
   }, [])
 
   const locate = () => {
-    if (!navigator.geolocation) { setLocationState('unavailable'); return }
+    if (!navigator.geolocation) { setPosition(CAMPUS_POINTS.start); setLocationState('demo'); return }
     setLocationState('locating')
     navigator.geolocation.getCurrentPosition(({ coords }) => {
       setPosition({ label: 'Point C · Your current position', lat: coords.latitude, lng: coords.longitude })
       setLocationState('live')
-    }, () => setLocationState('unavailable'), { enableHighAccuracy: true, timeout: 8000 })
+    }, () => { setPosition(CAMPUS_POINTS.start); setLocationState('demo') }, { enableHighAccuracy: true, timeout: 8000 })
   }
 
   if (camera) {
@@ -116,7 +117,7 @@ function Guide({ destination, setDestination, camera, setCamera }: { destination
     return <div className="camera-route"><video ref={videoRef} autoPlay playsInline muted /><div className="camera-tint" /><button className="camera-exit" onClick={() => setCamera(false)}><X size={17} />Exit navigation</button><div className="route-arrow" style={{ transform: `translate(-50%, -50%) rotate(${relativeBearing}deg)` }}><span className="route-arrow-ring"><Navigation size={28} fill="currentColor" /></span><span className="route-arrow-label">{Math.round(relativeBearing)}°</span></div><div className="camera-overlay"><div className="camera-status"><i className="live" />LIVE ROUTE / {locationState === 'live' ? 'GPS LOCKED' : 'WAITING FOR GPS'}</div><div className="route-readout"><div><b>{distance === null ? 'Locating...' : formatDistance(distance)}</b><span>to {destination}</span></div><div><b>{distance === null ? '--' : `${Math.round(relativeBearing)}°`}</b><span>{heading === null ? 'route heading' : 'turn from phone'}</span></div></div><p>{cameraError || (distance === null ? 'Waiting for your current position. Keep location enabled.' : 'Keep the marker centered ahead. Your position and direction update as you walk.')}</p><button className="outline light" onClick={() => setCamera(false)}>Back to route details</button></div></div>
   }
 
-  return <div className="view"><div className="guide-hero route-hero"><div className="grid-pattern" /><div className="guide-copy"><div className="eyebrow light"><i />Campus Guide / Live location</div><h1>Point C<br /><em>to Point B.</em></h1><p>Your current phone position is Point C. Walk toward the predefined Student Parking destination at Point B.</p></div><div className="route-orbit"><Target size={24} /><span>C</span><i /><span>B</span></div></div><div className="route-summary"><div className="route-point"><span className="point-pin start-pin">C</span><div><small>YOUR CURRENT POSITION</small><b>{position ? position.label : 'Waiting for GPS...'}</b><em>{position ? `${position.lat.toFixed(4)}, ${position.lng.toFixed(4)}` : 'Allow location access to begin'}</em></div></div><ArrowRight className="route-line" size={18} /><div className="route-point"><span className="point-pin end-pin">B</span><div><small>DESTINATION</small><input value={destination} onChange={e => setDestination(e.target.value)} /><em>{destinationPoint.lat.toFixed(4)}, {destinationPoint.lng.toFixed(4)}</em></div></div></div><div className="route-metrics"><div><span>Distance</span><b>{distance === null ? 'Locating...' : formatDistance(distance)}</b></div><div><span>Direction</span><b>{distance === null ? '--' : `${Math.round(bearing)}°`}</b></div><div><span>Route status</span><b className={`location-state ${locationState}`}>{locationState === 'live' ? 'GPS locked' : locationState === 'locating' ? 'Locating...' : 'Unavailable'}</b></div></div><div className="route-actions"><button className="primary" onClick={() => { locate(); setCamera(true) }}><Camera size={15} />Start camera route <ArrowRight size={15} /></button><button className="outline" onClick={locate}><LocateFixed size={15} />{locationState === 'locating' ? 'Locating...' : 'Refresh location'}</button></div><div className="footnote"><CircleAlert size={15} />Point C is your live device location. Point B is the predefined Student Parking coordinate.</div></div>
+  return <div className="view"><div className="guide-hero route-hero"><div className="grid-pattern" /><div className="guide-copy"><div className="eyebrow light"><i />Campus Guide / Demo route</div><h1>Point A<br /><em>to Point B.</em></h1><p>Follow the predefined route from the Main Entrance to the BIOM502 demo class at Student Parking.</p></div><div className="route-orbit"><Target size={24} /><span>A</span><i /><span>B</span></div></div><div className="route-summary"><div className="route-point"><span className="point-pin start-pin">A</span><div><small>STARTING POSITION</small><b>{position.label}</b><em>{position.lat.toFixed(4)}, {position.lng.toFixed(4)}</em></div></div><ArrowRight className="route-line" size={18} /><div className="route-point"><span className="point-pin end-pin">B</span><div><small>DESTINATION</small><input value={destination} onChange={e => setDestination(e.target.value)} /><em>{destinationPoint.lat.toFixed(4)}, {destinationPoint.lng.toFixed(4)}</em></div></div></div><div className="route-metrics"><div><span>Distance</span><b>{formatDistance(distance ?? 0)}</b></div><div><span>Direction</span><b>{`${Math.round(bearing)}°`}</b></div><div><span>Route status</span><b className={`location-state ${locationState}`}>{locationState === 'live' ? 'GPS locked' : locationState === 'locating' ? 'Locating...' : 'Demo route'}</b></div></div><div className="route-actions"><button className="primary" onClick={() => { locate(); setCamera(true) }}><Camera size={15} />Start camera route <ArrowRight size={15} /></button><button className="outline" onClick={locate}><LocateFixed size={15} />{locationState === 'locating' ? 'Locating...' : 'Use live location'}</button></div><div className="footnote"><CircleAlert size={15} />The demo starts at Point A and navigates to the BIOM502 class at Point B. Live GPS is optional.</div></div>
 }
 
 type GeoPoint = { label: string; lat: number; lng: number }
