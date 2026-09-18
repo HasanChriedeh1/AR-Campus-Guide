@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, ArrowUp, Bot, CalendarDays, Camera, ChevronDown, CircleAlert, Compass, CornerDownRight, Edit3, LayoutDashboard, LocateFixed, MapPin, Navigation, Plus, RefreshCw, RotateCcw, Send, Sparkles, Target, Trash2, X } from 'lucide-react'
 import type { DayName, Enrollment, Meeting, ScheduleResponse } from './types'
-import { formatDistance, getNavigationGuidance, normalizeDegrees, relativeBearing, smoothHeading } from './navigation'
+import { bearingBetween, distanceInMeters, formatDistance, getNavigationGuidance, normalizeDegrees, relativeBearing, smoothHeading } from './navigation'
 import type { CampusWalkingRoute, LiveHeading, LivePosition, NavigationDestination } from './navigation'
 import './campus.css'
 import './campus-route.css'
@@ -16,8 +16,10 @@ const STUDENT_PARKING: NavigationDestination = {
   coordinate: { lat: 33.71314599891659, lng: 35.48279627287705 },
 }
 const LOCATION_OPTIONS: PositionOptions = { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 }
+const POLLED_LOCATION_OPTIONS: PositionOptions = { enableHighAccuracy: true, maximumAge: 0, timeout: 4_000 }
 const GPS_LOCK_ACCURACY_METERS = 50
 const COMPASS_STALE_AFTER_MS = 1_500
+const LOCATION_POLL_INTERVAL_MS = 1_250
 const DEMO_SCHEDULE: ScheduleResponse = {
   semester: 'Fall 2026–27',
   enrolledCourses: [{ course: 'BIOM502', section: '1' }],
@@ -69,7 +71,11 @@ type DeviceOrientationConstructor = typeof DeviceOrientationEvent & {
 function Guide({ destination, camera, setCamera }: { destination: NavigationDestination; camera: boolean; setCamera: (value: boolean) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const watchIdRef = useRef<number | null>(null)
+  const locationPollRef = useRef<number | null>(null)
+  const locationPollPendingRef = useRef(false)
+  const latestPositionRef = useRef<LivePosition | null>(null)
   const orientationListenerRef = useRef<((event: DeviceOrientationEvent) => void) | null>(null)
+  const lastAbsoluteHeadingAtRef = useRef(0)
   const compassTimeoutRef = useRef<number | null>(null)
   const headingRef = useRef<LiveHeading | null>(null)
   const navigationSessionRef = useRef(0)
@@ -94,6 +100,11 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
       navigator.geolocation.clearWatch(watchIdRef.current)
       watchIdRef.current = null
     }
+    if (locationPollRef.current !== null) {
+      window.clearInterval(locationPollRef.current)
+      locationPollRef.current = null
+    }
+    locationPollPendingRef.current = false
   }, [])
 
   const stopCompassTracking = useCallback(() => {
@@ -124,6 +135,7 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
 
   const savePosition = useCallback((coords: GeolocationCoordinates, timestamp: number) => {
     const course = typeof coords.heading === 'number' && Number.isFinite(coords.heading) && coords.heading >= 0 ? normalizeDegrees(coords.heading) : null
+    const previousPosition = latestPositionRef.current
     const nextPosition: LivePosition = {
       lat: coords.latitude,
       lng: coords.longitude,
@@ -131,19 +143,38 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
       timestamp,
       course,
     }
+    latestPositionRef.current = nextPosition
     setPosition(nextPosition)
     setLocationError('')
     setLocationState(nextPosition.accuracy <= GPS_LOCK_ACCURACY_METERS ? 'live' : 'weak')
-    if (course !== null && typeof coords.speed === 'number' && Number.isFinite(coords.speed) && coords.speed > 0.5) saveHeading(course, 'course')
+    const speed = typeof coords.speed === 'number' && Number.isFinite(coords.speed) ? coords.speed : null
+    if (course !== null && (speed === null || speed > 0.25)) {
+      saveHeading(course, 'course')
+      return
+    }
+    if (previousPosition) {
+      const movement = distanceInMeters(previousPosition, nextPosition)
+      const movementThreshold = Math.max(2, Math.min(8, Math.max(previousPosition.accuracy, nextPosition.accuracy) * 0.25))
+      if (movement >= movementThreshold) saveHeading(bearingBetween(previousPosition, nextPosition), 'course')
+    }
   }, [saveHeading])
 
   const reportLocationError = useCallback((error: GeolocationPositionError) => {
-    setPosition(null)
     if (error.code === error.PERMISSION_DENIED) {
+      latestPositionRef.current = null
+      setPosition(null)
       setLocationState('denied')
       setLocationError('Location access was denied. Allow precise location and start navigation again.')
       return
     }
+    // Keep the last good fix during a temporary GPS interruption. The active
+    // watch and polling loop will continue trying in the background.
+    if (latestPositionRef.current) {
+      setLocationState('weak')
+      setLocationError('GPS update delayed. Keeping your last fix while reconnecting.')
+      return
+    }
+    setPosition(null)
     if (error.code === error.POSITION_UNAVAILABLE) {
       setLocationState('unavailable')
       setLocationError('Your location is unavailable. Move outdoors or check that location services are on.')
@@ -171,6 +202,22 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
       error => { if (navigationSessionRef.current === session) reportLocationError(error) },
       LOCATION_OPTIONS,
     )
+    const pollFreshPosition = () => {
+      if (navigationSessionRef.current !== session || locationPollPendingRef.current) return
+      locationPollPendingRef.current = true
+      navigator.geolocation.getCurrentPosition(
+        ({ coords, timestamp }) => {
+          locationPollPendingRef.current = false
+          if (navigationSessionRef.current === session) savePosition(coords, timestamp)
+        },
+        error => {
+          locationPollPendingRef.current = false
+          if (navigationSessionRef.current === session) reportLocationError(error)
+        },
+        POLLED_LOCATION_OPTIONS,
+      )
+    }
+    locationPollRef.current = window.setInterval(pollFreshPosition, LOCATION_POLL_INTERVAL_MS)
   }, [reportLocationError, savePosition, stopLocationTracking])
 
   const requestSingleLocation = useCallback(() => {
@@ -223,6 +270,13 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
       if (navigationSessionRef.current !== session) return
       const nextHeading = headingFromEvent(event)
       if (nextHeading === null) return
+      const updatedAt = Date.now()
+      const absoluteReading = isAbsoluteHeadingEvent(event)
+      // Some Android browsers emit absolute and relative events together.
+      // Prefer the true-north stream, but use relative readings when it is the
+      // only live sensor source available.
+      if (!absoluteReading && updatedAt - lastAbsoluteHeadingAtRef.current < COMPASS_STALE_AFTER_MS) return
+      if (absoluteReading) lastAbsoluteHeadingAtRef.current = updatedAt
       clearCompassTimeout()
       saveHeading(nextHeading, 'compass')
       setCompassState('active')
@@ -245,6 +299,8 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
     const session = navigationSessionRef.current + 1
     navigationSessionRef.current = session
     headingRef.current = null
+    latestPositionRef.current = null
+    lastAbsoluteHeadingAtRef.current = 0
     setHeading(null)
     setPosition(null)
     setLocationError('')
@@ -301,7 +357,35 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
   const routeMessage = serviceErrors || (!guidance ? 'Getting a fresh GPS position. Keep precise location enabled.' : !heading ? compassState === 'denied' ? 'Compass access was denied. Enable Motion & Orientation access, then start again.' : compassState === 'unavailable' ? 'Compass is unavailable. Start walking to use your travel direction instead.' : 'Calibrating your compass. Hold the phone upright and move it in a figure eight.' : `${guidance.instruction}. Keep the arrow centered as you walk.`)
 
   if (camera) {
-    return <div className="camera-route apple-navigation"><video ref={videoRef} autoPlay playsInline muted /><div className="camera-tint" /><header className="apple-navigation-header"><button className="apple-nav-end" aria-label="Exit navigation" onClick={exitNavigation}><X size={16} />End</button><div className="apple-nav-status"><i className="live" />{locationLabel}</div></header>{turn !== null && <div className="route-arrow" aria-label={`Turn ${Math.round(turn)} degrees`}><span className="route-arrow-ring" style={{ transform: `rotate(${turn}deg)` }}><ArrowUp size={32} strokeWidth={2.8} /></span><span className="route-arrow-label">{Math.round(turn)}°</span></div>}<section className="camera-overlay apple-route-card" aria-live="polite"><div className="apple-route-instruction"><span className="apple-maneuver"><ArrowUp size={25} strokeWidth={2.8} /></span><div><b>{guidance?.instruction ?? 'Finding your route'}</b><span>{routeMessage}</span></div><strong>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</strong></div><div className="apple-route-meta"><span>to {destination.label}</span><div><span>{turn === null ? 'Calibrating' : `${Math.round(turn)}°`}</span><small>{compassLabel}</small></div></div><div className="apple-route-footer"><span><b>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</b> remaining</span><button onClick={exitNavigation}>End route</button></div></section></div>
+    return (
+      <div className="camera-route apple-navigation">
+        <video ref={videoRef} autoPlay playsInline muted />
+        <div className="camera-tint" />
+        <header className="apple-navigation-header">
+          <button className="apple-nav-end" aria-label="Exit navigation" onClick={exitNavigation}><X size={16} />End</button>
+          <div className="apple-nav-status"><i className="live" />{locationLabel}</div>
+        </header>
+        {turn !== null && <div className="route-arrow" aria-label={`Turn ${Math.round(turn)} degrees`}>
+          <span className="route-arrow-ring" style={{ transform: `rotate(${turn}deg)` }}><ArrowUp size={32} strokeWidth={2.8} /></span>
+          <span className="route-arrow-label">{turn.toFixed(1)}°</span>
+        </div>}
+        <section className="camera-overlay apple-route-card" aria-live="polite">
+          <div className="apple-route-instruction">
+            <span className="apple-maneuver"><ArrowUp size={25} strokeWidth={2.8} /></span>
+            <div><b>{guidance?.instruction ?? 'Finding your route'}</b><span>{routeMessage}</span></div>
+            <strong>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</strong>
+          </div>
+          <div className="apple-route-meta">
+            <span>to {destination.label}</span>
+            <div><span>{turn === null ? 'Calibrating' : `${turn.toFixed(1)}°`}</span><small>{compassLabel}</small></div>
+          </div>
+          <div className="apple-route-footer">
+            <span><b>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</b> remaining</span>
+            <button onClick={exitNavigation}>End route</button>
+          </div>
+        </section>
+      </div>
+    )
   }
 
   return <div className="view"><div className="guide-hero route-hero"><div className="grid-pattern" /><div className="guide-copy"><div className="eyebrow light"><i />Campus Guide / Live guidance</div><h1>Your position<br /><em>to Point B.</em></h1><p>Use your live location and compass to point directly to the BIOM502 class at Student Parking.</p></div><div className="route-orbit"><Target size={24} /><span>C</span><i /><span>B</span></div></div><div className="route-summary"><div className="route-point"><span className="point-pin start-pin">C</span><div><small>CURRENT POSITION</small><b>{position ? 'Your live location' : 'Live location not acquired'}</b><em>{position ? `${position.lat.toFixed(4)}, ${position.lng.toFixed(4)} · ±${Math.round(position.accuracy)} m` : 'Start camera navigation for a fresh GPS position'}</em></div></div><ArrowRight className="route-line" size={18} /><div className="route-point"><span className="point-pin end-pin">B</span><div><small>DESTINATION</small><b>{destination.label}</b><em>{destination.coordinate.lat.toFixed(4)}, {destination.coordinate.lng.toFixed(4)}</em></div></div></div><div className="route-metrics"><div><span>Distance</span><b>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</b></div><div><span>Direction</span><b>{guidance ? `${Math.round(guidance.bearing)}°` : '—'}</b></div><div><span>Route status</span><b className={`location-state ${locationState === 'unavailable' || locationState === 'denied' || locationState === 'error' ? 'unavailable' : ''}`}>{locationLabel}</b></div></div><div className="route-actions"><button className="primary" onClick={startNavigation}><Camera size={15} />Start camera route <ArrowRight size={15} /></button><button className="outline" onClick={requestSingleLocation}><LocateFixed size={15} />{locationState === 'acquiring' ? 'Locating...' : 'Use live location'}</button></div><div className="footnote"><CircleAlert size={15} />Guidance points directly to Student Parking today. Campus walking routes can later provide the same camera overlay with path-aware turns.</div></div>
@@ -316,6 +400,13 @@ function headingFromEvent(event: DeviceOrientationEvent) {
   const legacyScreenAngle = (window as Window & { orientation?: number }).orientation
   const screenAngle = window.screen.orientation?.angle ?? (typeof legacyScreenAngle === 'number' ? legacyScreenAngle : 0)
   return normalizeDegrees(360 - event.alpha + screenAngle)
+}
+function isAbsoluteHeadingEvent(event: DeviceOrientationEvent) {
+  const webkitEvent = event as DeviceOrientationEvent & { webkitCompassHeading?: number; webkitCompassAccuracy?: number }
+  const hasWebkitCompass = typeof webkitEvent.webkitCompassHeading === 'number'
+    && Number.isFinite(webkitEvent.webkitCompassHeading)
+    && (webkitEvent.webkitCompassAccuracy === undefined || webkitEvent.webkitCompassAccuracy >= 0)
+  return hasWebkitCompass || event.type === 'deviceorientationabsolute' || event.absolute === true
 }
 function Assistant() { const prompts = ['Where is my next class?', 'What should I do now?', 'I have 40 minutes before class.', 'Take me to Student Parking.']; const [message, setMessage] = useState(''); return <div className="view"><div className="assistant-heading"><span className="assistant-orb"><Bot size={26} /></span><div><div className="eyebrow"><i />CampusMate intelligence</div><h1>Ask your <em>companion.</em></h1><p>The n8n AI agent will live here next.</p></div><b className="coming">COMING SOON</b></div><div className="panel chat"><div className="chat-intro"><Sparkles size={18} /><h2>Ready when you are.</h2><p>Connect a future AI Agent webhook to make this space conversational.</p></div><div className="prompts">{prompts.map(prompt => <button key={prompt} onClick={() => setMessage(prompt)}>{prompt}<ArrowRight size={14} /></button>)}</div><div className="composer"><input value={message} onChange={e => setMessage(e.target.value)} placeholder="Ask CampusMate anything..." /><button disabled={!message}><Send size={16} /></button></div><small className="disclaimer"><CircleAlert size={13} />No AI agent is connected in this preview. Your message will not be sent.</small></div></div> }
 function Modal({ meeting, close }: { meeting: Meeting; close: () => void }) { return <div className="backdrop" onClick={close}><section className="panel modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={close}><X size={16} /></button><b className={`course-tag ${color(meeting.course)}`}>{meeting.course}</b><h2>{meeting.title}</h2><p>Section {meeting.section} · {meeting.status}</p><div className="modal-details"><span><CalendarDays size={15} />{meeting.day}, {timeLabel(meeting.start)} – {timeLabel(meeting.end)}</span><span><MapPin size={15} />{meeting.room || 'Room to be announced'}</span></div><button className="primary full"><Navigation size={15} />Guide me here</button></section></div> }

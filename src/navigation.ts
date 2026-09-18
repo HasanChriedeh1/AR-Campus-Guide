@@ -108,7 +108,9 @@ export function getNavigationGuidance(
 }
 
 export function formatDistance(meters: number) {
-  return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`
+  if (meters >= 1000) return `${(meters / 1000).toFixed(1)} km`
+  if (meters >= 100) return `${Math.round(meters)} m`
+  return `${meters.toFixed(1)} m`
 }
 
 function toRadians(degrees: number) {

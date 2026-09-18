@@ -117,6 +117,19 @@ describe('live camera navigation', () => {
     expect(screen.queryByText('—')).toBeNull()
   })
 
+  it('recomputes remaining distance from every live location fix', () => {
+    openCameraRoute()
+    sendPosition()
+    const initialDistance = document.querySelector('.apple-route-instruction > strong')?.textContent
+
+    sendPosition({ longitude: 35.48279627287705 })
+    const updatedDistance = document.querySelector('.apple-route-instruction > strong')?.textContent
+
+    expect(initialDistance).toBeTruthy()
+    expect(updatedDistance).toBe('0.0 m')
+    expect(updatedDistance).not.toBe(initialDistance)
+  })
+
   it('updates from regular deviceorientation events that do not expose the absolute flag', async () => {
     openCameraRoute()
     await waitFor(() => expect(requestMotionPermission).toHaveBeenCalledTimes(1))
