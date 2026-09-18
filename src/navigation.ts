@@ -6,7 +6,27 @@ export type GeoCoordinate = {
 export type NavigationDestination = {
   id: string
   label: string
+  description: string
+  imageSrc: string
+  imageAlt: string
+  isDemoCoordinate: boolean
   coordinate: GeoCoordinate
+}
+
+export type GuidanceCueId =
+  | 'hold-steady'
+  | 'go-straight'
+  | 'bear-left'
+  | 'bear-right'
+  | 'turn-left'
+  | 'turn-right'
+  | 'turn-around'
+  | 'arrived'
+
+export type GuidanceCue = {
+  id: GuidanceCueId
+  label: string
+  announcement: string
 }
 
 export type LivePosition = GeoCoordinate & {
@@ -51,6 +71,21 @@ export type LiveHeading = {
 }
 
 const EARTH_RADIUS_METERS = 6_371_000
+const STRAIGHT_THRESHOLD_DEGREES = 15
+const BEAR_THRESHOLD_DEGREES = 45
+const TURN_AROUND_THRESHOLD_DEGREES = 135
+const CUE_HYSTERESIS_DEGREES = 5
+
+const GUIDANCE_CUES: Record<GuidanceCueId, GuidanceCue> = {
+  'hold-steady': { id: 'hold-steady', label: 'Hold steady', announcement: 'Hold steady' },
+  'go-straight': { id: 'go-straight', label: 'Go straight', announcement: 'Go straight' },
+  'bear-left': { id: 'bear-left', label: 'Bear left', announcement: 'Bear left' },
+  'bear-right': { id: 'bear-right', label: 'Bear right', announcement: 'Bear right' },
+  'turn-left': { id: 'turn-left', label: 'Turn left now', announcement: 'Turn left now' },
+  'turn-right': { id: 'turn-right', label: 'Turn right now', announcement: 'Turn right now' },
+  'turn-around': { id: 'turn-around', label: 'Turn around', announcement: 'Turn around' },
+  arrived: { id: 'arrived', label: 'You\u2019ve arrived', announcement: 'You have arrived' },
+}
 
 export function normalizeDegrees(degrees: number) {
   return ((degrees % 360) + 360) % 360
@@ -81,6 +116,43 @@ export function relativeBearing(targetBearing: number, deviceHeading: number) {
 export function signedRelativeBearing(targetBearing: number, deviceHeading: number) {
   const turn = normalizeDegrees(targetBearing - deviceHeading + 180) - 180
   return Object.is(turn, -0) ? 0 : turn
+}
+
+/**
+ * Convert the live relative bearing into a calm, human-readable instruction.
+ * The previous stable cue expands its own range slightly so small compass
+ * changes near a threshold do not make the UI and voice guidance chatter.
+ */
+export function getGuidanceCue(
+  turn: number | null,
+  arrived = false,
+  previousCueId?: GuidanceCueId,
+): GuidanceCue {
+  if (arrived) return GUIDANCE_CUES.arrived
+  if (turn === null || !Number.isFinite(turn)) return GUIDANCE_CUES['hold-steady']
+
+  const magnitude = Math.abs(turn)
+  const direction = turn < 0 ? 'left' : 'right'
+
+  if (previousCueId === 'go-straight' && magnitude <= STRAIGHT_THRESHOLD_DEGREES + CUE_HYSTERESIS_DEGREES) {
+    return GUIDANCE_CUES['go-straight']
+  }
+  if (previousCueId === `bear-${direction}` && magnitude >= STRAIGHT_THRESHOLD_DEGREES - CUE_HYSTERESIS_DEGREES
+    && magnitude <= BEAR_THRESHOLD_DEGREES + CUE_HYSTERESIS_DEGREES) {
+    return GUIDANCE_CUES[previousCueId]
+  }
+  if (previousCueId === `turn-${direction}` && magnitude >= BEAR_THRESHOLD_DEGREES - CUE_HYSTERESIS_DEGREES
+    && magnitude <= TURN_AROUND_THRESHOLD_DEGREES + CUE_HYSTERESIS_DEGREES) {
+    return GUIDANCE_CUES[previousCueId]
+  }
+  if (previousCueId === 'turn-around' && magnitude >= TURN_AROUND_THRESHOLD_DEGREES - CUE_HYSTERESIS_DEGREES) {
+    return GUIDANCE_CUES['turn-around']
+  }
+
+  if (magnitude <= STRAIGHT_THRESHOLD_DEGREES) return GUIDANCE_CUES['go-straight']
+  if (magnitude <= BEAR_THRESHOLD_DEGREES) return GUIDANCE_CUES[`bear-${direction}`]
+  if (magnitude <= TURN_AROUND_THRESHOLD_DEGREES) return GUIDANCE_CUES[`turn-${direction}`]
+  return GUIDANCE_CUES['turn-around']
 }
 
 /** Keep a normalized angle on a continuous axis so CSS never spins the long way. */

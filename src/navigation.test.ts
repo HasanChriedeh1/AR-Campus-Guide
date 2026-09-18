@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { bearingBetween, compassHeadingFromOrientation, distanceInMeters, getNavigationGuidance, relativeBearing, signedRelativeBearing, smoothHeading, unwrapDegrees } from './navigation'
+import { bearingBetween, compassHeadingFromOrientation, distanceInMeters, getGuidanceCue, getNavigationGuidance, relativeBearing, signedRelativeBearing, smoothHeading, unwrapDegrees } from './navigation'
 import type { CampusWalkingRoute, NavigationDestination } from './navigation'
 
 const destination: NavigationDestination = {
   id: 'student-parking',
   label: 'Student Parking · Point B',
+  description: 'Test destination',
+  imageSrc: '/test.png',
+  imageAlt: 'Test destination',
+  isDemoCoordinate: true,
   coordinate: { lat: 33.71314599891659, lng: 35.48279627287705 },
 }
 
@@ -56,5 +60,25 @@ describe('navigation calculations', () => {
       distanceMeters: 124,
       instruction: 'Turn right at the library',
     })
+  })
+
+  it('maps relative bearings to semantic visual and spoken cues', () => {
+    expect(getGuidanceCue(null).id).toBe('hold-steady')
+    expect(getGuidanceCue(0).id).toBe('go-straight')
+    expect(getGuidanceCue(-15).id).toBe('go-straight')
+    expect(getGuidanceCue(-16).id).toBe('bear-left')
+    expect(getGuidanceCue(45).id).toBe('bear-right')
+    expect(getGuidanceCue(46).id).toBe('turn-right')
+    expect(getGuidanceCue(-135).id).toBe('turn-left')
+    expect(getGuidanceCue(136).id).toBe('turn-around')
+    expect(getGuidanceCue(0, true)).toEqual(expect.objectContaining({ id: 'arrived', label: 'You’ve arrived' }))
+  })
+
+  it('uses hysteresis to keep a stable cue near direction thresholds', () => {
+    expect(getGuidanceCue(18, false, 'go-straight').id).toBe('go-straight')
+    expect(getGuidanceCue(48, false, 'bear-right').id).toBe('bear-right')
+    expect(getGuidanceCue(-42, false, 'turn-left').id).toBe('turn-left')
+    expect(getGuidanceCue(132, false, 'turn-around').id).toBe('turn-around')
+    expect(getGuidanceCue(-18, false, 'bear-right').id).toBe('bear-left')
   })
 })

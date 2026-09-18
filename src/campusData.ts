@@ -1,11 +1,14 @@
 import type { NavigationDestination } from './navigation'
 
+export const DEMO_COORDINATE = { lat: 33.71314599891659, lng: 35.48279627287705 } as const
+
 export const CAMPUS_DESTINATIONS = [
-  { id: 'block-c', label: 'Block C', description: 'Classrooms and computer labs', coordinate: { lat: 33.713350, lng: 35.482550 } },
-  { id: 'block-i', label: 'Block I', description: 'Student services and facilities', coordinate: { lat: 33.712960, lng: 35.482550 } },
-  { id: 'library', label: 'Library', description: 'Study, research, and quiet spaces', coordinate: { lat: 33.713260, lng: 35.482700 } },
-  { id: 'cafeteria', label: 'Cafeteria', description: 'Food, drinks, and student seating', coordinate: { lat: 33.713100, lng: 35.482900 } },
-] satisfies Array<NavigationDestination & { description: string }>
+  { id: 'finance', label: 'Finance', description: 'Student accounts, tuition, and payments', imageSrc: '/finance.png', imageAlt: 'Entrance to the RHU Finance office', isDemoCoordinate: true, coordinate: DEMO_COORDINATE },
+  { id: 'cafeteria', label: 'Cafeteria', description: 'Food, drinks, and student seating', imageSrc: '/Cafeteria.png', imageAlt: 'RHU cafeteria building and Campus Bites sign', isDemoCoordinate: true, coordinate: DEMO_COORDINATE },
+  { id: 'block-c', label: 'Block C', description: 'Classrooms and computer labs', imageSrc: '/blockC.png', imageAlt: 'Exterior view of RHU Block C', isDemoCoordinate: true, coordinate: DEMO_COORDINATE },
+  { id: 'library', label: 'Library', description: 'Study, research, and quiet spaces', imageSrc: '/Library.png', imageAlt: 'Arched entrance to the RHU Library', isDemoCoordinate: true, coordinate: DEMO_COORDINATE },
+  { id: 'admissions', label: 'Admissions', description: 'Applications and prospective student support', imageSrc: '/admissions.png', imageAlt: 'Entrance and sign for the RHU Admissions Office', isDemoCoordinate: true, coordinate: DEMO_COORDINATE },
+] satisfies NavigationDestination[]
 
 export type MenuCategory = 'Breakfast' | 'Mains' | 'Snacks' | 'Drinks'
 

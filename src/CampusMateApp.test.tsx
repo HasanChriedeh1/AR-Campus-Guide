@@ -9,6 +9,8 @@ let clearWatch: ReturnType<typeof vi.fn>
 let getUserMedia: ReturnType<typeof vi.fn>
 let requestMotionPermission: ReturnType<typeof vi.fn>
 let stopTrack: ReturnType<typeof vi.fn>
+let speechSpeak: ReturnType<typeof vi.fn>
+let speechCancel: ReturnType<typeof vi.fn>
 let storage: Map<string, string>
 
 beforeEach(() => {
@@ -18,7 +20,19 @@ beforeEach(() => {
   stopTrack = vi.fn()
   getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] })
   requestMotionPermission = vi.fn().mockResolvedValue('granted')
+  speechSpeak = vi.fn()
+  speechCancel = vi.fn()
   storage = new Map()
+
+  class MockSpeechSynthesisUtterance {
+    text: string
+    lang = ''
+    rate = 1
+
+    constructor(text: string) {
+      this.text = text
+    }
+  }
 
   const localStorageMock: Storage = {
     get length() { return storage.size },
@@ -33,6 +47,8 @@ beforeEach(() => {
   Object.defineProperty(HTMLMediaElement.prototype, 'play', { configurable: true, value: vi.fn().mockResolvedValue(undefined) })
   Object.defineProperty(window, 'localStorage', { configurable: true, value: localStorageMock })
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: localStorageMock })
+  Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: { cancel: speechCancel, speak: speechSpeak } })
+  Object.defineProperty(window, 'SpeechSynthesisUtterance', { configurable: true, value: MockSpeechSynthesisUtterance })
   Object.defineProperty(window, 'DeviceOrientationEvent', {
     configurable: true,
     value: { requestPermission: requestMotionPermission },
@@ -187,6 +203,55 @@ describe('live camera navigation', () => {
     expect(arrow.style.transform).not.toBe(initialTransform)
   })
 
+  it('stabilizes the contextual cue before animating a new instruction', async () => {
+    vi.useFakeTimers()
+    openCameraRoute()
+    await act(async () => { await Promise.resolve() })
+    sendPosition()
+    sendOrientation('deviceorientation', { webkitCompassHeading: 0, webkitCompassAccuracy: 5 })
+
+    expect(screen.getByRole('status').textContent).toBe('Hold steady')
+    act(() => vi.advanceTimersByTime(749))
+    expect(screen.getByRole('status').textContent).toBe('Hold steady')
+    act(() => vi.advanceTimersByTime(1))
+    expect(screen.getByRole('status').textContent).toBe('Turn right now')
+  })
+
+  it('speaks stable cues by default, throttles them, and supports mute and cleanup', async () => {
+    vi.useFakeTimers()
+    openCameraRoute()
+    await act(async () => { await Promise.resolve() })
+
+    expect(speechSpeak).toHaveBeenCalledTimes(1)
+    expect(speechSpeak.mock.calls[0][0].text).toBe('Starting guidance to Student Parking · Point B')
+
+    sendPosition()
+    sendOrientation('deviceorientation', { webkitCompassHeading: 0, webkitCompassAccuracy: 5 })
+    act(() => vi.advanceTimersByTime(750))
+    expect(speechSpeak).toHaveBeenCalledTimes(1)
+    act(() => vi.advanceTimersByTime(2_250))
+    expect(speechSpeak).toHaveBeenCalledTimes(2)
+    expect(speechSpeak.mock.calls[1][0].text).toBe('Turn right now')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mute spoken guidance' }))
+    expect(speechCancel).toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Unmute spoken guidance' }))
+    expect(speechSpeak).toHaveBeenCalledTimes(3)
+    expect(speechSpeak.mock.calls[2][0].text).toBe('Turn right now')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Exit navigation' }))
+    expect(speechCancel.mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('keeps visual guidance available when speech synthesis is unsupported', () => {
+    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: undefined })
+    Object.defineProperty(window, 'SpeechSynthesisUtterance', { configurable: true, value: undefined })
+    openCameraRoute()
+
+    expect(screen.getByRole('button', { name: 'Spoken guidance unavailable' }).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByRole('status').textContent).toBe('Hold steady')
+  })
+
   it('falls back to a fresh walking direction when compass updates stop', async () => {
     vi.useFakeTimers()
     openCameraRoute()
@@ -215,6 +280,7 @@ describe('live camera navigation', () => {
 
     expect(screen.getByLabelText('Destination reached')).toBeTruthy()
     expect(document.querySelector('.apple-navigation')?.classList.contains('is-arrived')).toBe(true)
+    expect(speechSpeak.mock.calls.at(-1)?.[0].text).toBe('You have arrived')
   })
 
   it('keeps guidance visible on the gradient fallback when the camera fails', async () => {

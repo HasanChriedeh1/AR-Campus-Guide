@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, ArrowUp, Bot, CalendarDays, Camera, Check, ChevronDown, CircleAlert, Compass, CornerDownRight, Edit3, LayoutDashboard, LocateFixed, MapPin, Navigation, Plus, RefreshCw, RotateCcw, Send, Sparkles, Trash2, X } from 'lucide-react'
+import { ArrowRight, ArrowUp, Bot, CalendarDays, Camera, Check, ChevronDown, CircleAlert, Compass, CornerDownRight, Edit3, LayoutDashboard, LocateFixed, MapPin, Navigation, Plus, RefreshCw, RotateCcw, Send, Sparkles, Trash2, Volume2, VolumeX, X } from 'lucide-react'
 import type { DayName, Enrollment, Meeting, ScheduleResponse } from './types'
-import { bearingBetween, compassHeadingFromOrientation, distanceInMeters, formatDistance, getNavigationGuidance, normalizeDegrees, signedRelativeBearing, smoothHeading, unwrapDegrees } from './navigation'
-import type { CampusWalkingRoute, LiveHeading, LivePosition, NavigationDestination } from './navigation'
+import { bearingBetween, compassHeadingFromOrientation, distanceInMeters, formatDistance, getGuidanceCue, getNavigationGuidance, normalizeDegrees, signedRelativeBearing, smoothHeading, unwrapDegrees } from './navigation'
+import type { CampusWalkingRoute, GuidanceCue, LiveHeading, LivePosition, NavigationDestination } from './navigation'
 import './campus-route.css'
 
 const DEMO: Enrollment[] = ['BIOM502','BIOM519','BIOM521','BIOM522','ECE595A','CCEE534','ENGR510'].map((course, index) => ({ course, section: index === 5 ? '2' : '1' }))
@@ -12,6 +12,10 @@ const COLORS = ['coral','cyan','lime','violet','amber','blue','pink']
 const STUDENT_PARKING: NavigationDestination = {
   id: 'student-parking',
   label: 'Student Parking · Point B',
+  description: 'Legacy camera navigation test destination',
+  imageSrc: '/logo.png',
+  imageAlt: 'Rafik Hariri University logo',
+  isDemoCoordinate: true,
   coordinate: { lat: 33.71314599891659, lng: 35.48279627287705 },
 }
 const LOCATION_OPTIONS: PositionOptions = { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 }
@@ -27,6 +31,8 @@ const NEARBY_DISTANCE_METERS = 10
 const ARRIVAL_DISTANCE_METERS = 3
 const ARRIVAL_ACCURACY_METERS = 10
 const ARRIVAL_FIX_COUNT = 3
+const CUE_STABILITY_MS = 750
+const VOICE_MIN_INTERVAL_MS = 3_000
 const DEMO_SCHEDULE: ScheduleResponse = {
   semester: 'Fall 2026–27',
   enrolledCourses: [{ course: 'BIOM502', section: '1' }],
@@ -90,6 +96,13 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
   const arrowIconRef = useRef<SVGSVGElement>(null)
   const arrivalFixesRef = useRef(0)
   const navigationSessionRef = useRef(0)
+  const cueTimeoutRef = useRef<number | null>(null)
+  const speechTimeoutRef = useRef<number | null>(null)
+  const pendingSpeechKeyRef = useRef('')
+  const lastSpokenKeyRef = useRef('')
+  const lastSpokenAtRef = useRef(0)
+  const announcedStartRef = useRef(false)
+  const voiceEnabledRef = useRef(true)
   const [position, setPosition] = useState<LivePosition | null>(null)
   const [locationState, setLocationState] = useState<LocationState>('idle')
   const [locationError, setLocationError] = useState('')
@@ -98,9 +111,56 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
   const [arrivalFixes, setArrivalFixes] = useState(0)
   const [cameraError, setCameraError] = useState('')
   const [cameraAttempt, setCameraAttempt] = useState(0)
+  const [stableCue, setStableCue] = useState<GuidanceCue>(() => getGuidanceCue(null))
+  const [voiceEnabled, setVoiceEnabled] = useState(true)
   const destination = defaultDestination
   const route: CampusWalkingRoute | null = null
   const guidance = useMemo(() => position ? getNavigationGuidance(position, destination, route) : null, [destination, position, route])
+  const speechSupported = typeof window.speechSynthesis !== 'undefined'
+    && typeof window.SpeechSynthesisUtterance === 'function'
+
+  const clearCueTimeout = useCallback(() => {
+    if (cueTimeoutRef.current !== null) {
+      window.clearTimeout(cueTimeoutRef.current)
+      cueTimeoutRef.current = null
+    }
+  }, [])
+
+  const cancelSpeech = useCallback(() => {
+    if (speechTimeoutRef.current !== null) {
+      window.clearTimeout(speechTimeoutRef.current)
+      speechTimeoutRef.current = null
+    }
+    pendingSpeechKeyRef.current = ''
+    if (speechSupported) window.speechSynthesis.cancel()
+  }, [speechSupported])
+
+  const enqueueSpeech = useCallback((text: string, key: string, urgent = false) => {
+    if (!speechSupported || !voiceEnabledRef.current) return
+    if (key === lastSpokenKeyRef.current || key === pendingSpeechKeyRef.current) return
+
+    const deliver = () => {
+      speechTimeoutRef.current = null
+      pendingSpeechKeyRef.current = ''
+      if (!voiceEnabledRef.current) return
+      window.speechSynthesis.cancel()
+      const utterance = new window.SpeechSynthesisUtterance(text)
+      utterance.lang = 'en-US'
+      utterance.rate = 1
+      window.speechSynthesis.speak(utterance)
+      lastSpokenKeyRef.current = key
+      lastSpokenAtRef.current = Date.now()
+    }
+
+    const wait = urgent ? 0 : Math.max(0, VOICE_MIN_INTERVAL_MS - (Date.now() - lastSpokenAtRef.current))
+    if (speechTimeoutRef.current !== null) window.clearTimeout(speechTimeoutRef.current)
+    if (wait === 0) {
+      deliver()
+      return
+    }
+    pendingSpeechKeyRef.current = key
+    speechTimeoutRef.current = window.setTimeout(deliver, wait)
+  }, [speechSupported])
 
   const clearCompassTimeout = useCallback(() => {
     if (compassTimeoutRef.current !== null) {
@@ -348,6 +408,8 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
 
   const startNavigation = () => {
     stopSensors()
+    cancelSpeech()
+    clearCueTimeout()
     const session = navigationSessionRef.current + 1
     navigationSessionRef.current = session
     headingRef.current = null
@@ -356,10 +418,16 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
     latestPositionRef.current = null
     displayRotationRef.current = null
     arrivalFixesRef.current = 0
+    lastSpokenKeyRef.current = ''
+    lastSpokenAtRef.current = 0
+    announcedStartRef.current = false
+    voiceEnabledRef.current = true
     setHeading(null)
     setPosition(null)
     setArrivalFixes(0)
     setLocationError('')
+    setStableCue(getGuidanceCue(null))
+    setVoiceEnabled(true)
     setCameraError(!window.isSecureContext ? 'Camera access requires HTTPS (or localhost).' : !navigator.mediaDevices?.getUserMedia ? 'This browser does not support camera access.' : '')
     setCompassState('acquiring')
     setCamera(true)
@@ -370,13 +438,17 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
   const exitNavigation = () => {
     navigationSessionRef.current += 1
     stopSensors()
+    clearCueTimeout()
+    cancelSpeech()
     setCamera(false)
   }
 
   useEffect(() => () => {
     navigationSessionRef.current += 1
     stopSensors()
-  }, [stopSensors])
+    clearCueTimeout()
+    cancelSpeech()
+  }, [cancelSpeech, clearCueTimeout, stopSensors])
 
   useEffect(() => {
     if (!camera) return
@@ -419,6 +491,36 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
   }, [turn])
 
   const arrived = arrivalFixes >= ARRIVAL_FIX_COUNT
+  const cueCandidate = getGuidanceCue(turn, arrived, stableCue.id)
+
+  useEffect(() => {
+    if (!camera || cueCandidate.id === stableCue.id) {
+      clearCueTimeout()
+      return
+    }
+    clearCueTimeout()
+    if (cueCandidate.id === 'arrived') {
+      setStableCue(cueCandidate)
+      return
+    }
+    cueTimeoutRef.current = window.setTimeout(() => {
+      cueTimeoutRef.current = null
+      setStableCue(cueCandidate)
+    }, CUE_STABILITY_MS)
+    return clearCueTimeout
+  }, [camera, clearCueTimeout, cueCandidate, stableCue.id])
+
+  useEffect(() => {
+    if (!camera || !voiceEnabled || announcedStartRef.current) return
+    announcedStartRef.current = true
+    enqueueSpeech(`Starting guidance to ${destination.label}`, `start:${navigationSessionRef.current}`, true)
+  }, [camera, destination.label, enqueueSpeech, voiceEnabled])
+
+  useEffect(() => {
+    if (!camera || !voiceEnabled || stableCue.id === 'hold-steady') return
+    enqueueSpeech(stableCue.announcement, `cue:${stableCue.id}`, stableCue.id === 'arrived')
+  }, [camera, enqueueSpeech, stableCue, voiceEnabled])
+
   const nearby = !arrived && (guidance?.distanceMeters ?? Number.POSITIVE_INFINITY) <= NEARBY_DISTANCE_METERS
   const aligned = turn !== null && Math.abs(turn) <= ALIGNED_THRESHOLD_DEGREES
   const precisionState = arrived ? 'arrived' : aligned ? 'aligned' : turn !== null ? 'active' : 'searching'
@@ -446,6 +548,19 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
   const needsRetry = locationState === 'denied' || locationState === 'unavailable' || locationState === 'error'
     || compassState === 'denied' || compassState === 'unavailable' || Boolean(cameraError)
 
+  const toggleVoice = () => {
+    if (voiceEnabled) {
+      voiceEnabledRef.current = false
+      setVoiceEnabled(false)
+      cancelSpeech()
+      return
+    }
+    voiceEnabledRef.current = true
+    lastSpokenKeyRef.current = ''
+    setVoiceEnabled(true)
+    enqueueSpeech(stableCue.announcement, `cue:${stableCue.id}`, true)
+  }
+
   const retryServices = () => {
     const session = navigationSessionRef.current
     setLocationError('')
@@ -463,9 +578,13 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
         <div className="camera-tint" />
         <header className="precision-header">
           <div className="precision-destination"><small>Finding</small><b>{destination.label}</b></div>
-          <button className="precision-close" aria-label="Exit navigation" onClick={exitNavigation}><X size={20} /></button>
+          <div className="precision-header-actions">
+            <button className="precision-voice" type="button" aria-label={speechSupported ? voiceEnabled ? 'Mute spoken guidance' : 'Unmute spoken guidance' : 'Spoken guidance unavailable'} title={speechSupported ? voiceEnabled ? 'Mute spoken guidance' : 'Unmute spoken guidance' : 'Spoken guidance is unavailable in this browser'} disabled={!speechSupported} onClick={toggleVoice}>{voiceEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}</button>
+            <button className="precision-close" aria-label="Exit navigation" onClick={exitNavigation}><X size={20} /></button>
+          </div>
         </header>
-        <main className="precision-stage" aria-live="polite">
+        <main className="precision-stage">
+          <div key={stableCue.id} className={`precision-cue cue-${stableCue.id}`} role="status" aria-live="polite" aria-atomic="true">{stableCue.label}</div>
           {arrived ? (
             <div className="precision-arrival" aria-label="Destination reached"><Check size={82} strokeWidth={2.5} /></div>
           ) : turn !== null ? (

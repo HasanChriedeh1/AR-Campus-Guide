@@ -9,7 +9,6 @@ import {
   Coffee,
   GraduationCap,
   Home,
-  Library,
   LoaderCircle,
   LockKeyhole,
   LogOut,
@@ -30,6 +29,7 @@ import type { DayName, ScheduleMeeting, StudentSession } from './types'
 import './rhu.css'
 
 const SESSION_KEY = 'rhu-student-session-v1'
+const CREDENTIAL_KEY = 'rhu-student-credential-v1'
 const CHAT_SESSION_KEY = 'rhu-chat-session-v1'
 const DAYS: DayName[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 const MENU_CATEGORIES: MenuCategory[] = ['Breakfast', 'Mains', 'Snacks', 'Drinks']
@@ -59,6 +59,23 @@ function readSession(): StudentSession | null {
       || !Array.isArray(value.schedule.courses)
       || !Array.isArray(value.schedule.meetings)) return null
     return value as StudentSession
+  } catch {
+    return null
+  }
+}
+
+function saveCredential(username: string, password: string) {
+  sessionStorage.setItem(CREDENTIAL_KEY, JSON.stringify({ username, password }))
+}
+
+function readCredential(username: string) {
+  try {
+    const raw = sessionStorage.getItem(CREDENTIAL_KEY)
+    if (!raw) return null
+    const value = JSON.parse(raw) as { username?: unknown; password?: unknown }
+    return value.username === username && typeof value.password === 'string' && value.password
+      ? value.password
+      : null
   } catch {
     return null
   }
@@ -95,10 +112,12 @@ function formatUpdated(timestamp: number) {
 export default function RhuStudentApp() {
   const [session, setSession] = useState<StudentSession | null>(() => readSession())
   const [view, setView] = useState<View>('home')
-  const [destination, setDestination] = useState(CAMPUS_DESTINATIONS[0])
+  const [destination, setDestination] = useState<(typeof CAMPUS_DESTINATIONS)[number] | null>(null)
   const [camera, setCamera] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
   const [refreshOpen, setRefreshOpen] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState('')
 
   const saveSession = (next: StudentSession) => {
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(next))
@@ -107,11 +126,35 @@ export default function RhuStudentApp() {
 
   const authenticate = async (username: string, password: string) => {
     const schedule = await fetchSchedule(username, password)
+    saveCredential(username, password)
     saveSession({ username, schedule, fetchedAt: Date.now() })
+  }
+
+  const refreshSchedule = async (password?: string) => {
+    if (!session) return
+    const savedPassword = password ?? readCredential(session.username)
+    if (!savedPassword) {
+      setRefreshOpen(true)
+      return
+    }
+    setRefreshing(true)
+    setRefreshError('')
+    try {
+      const schedule = await fetchSchedule(session.username, savedPassword)
+      saveCredential(session.username, savedPassword)
+      saveSession({ ...session, schedule, fetchedAt: Date.now() })
+      setRefreshOpen(false)
+    } catch (reason) {
+      setRefreshError(reason instanceof Error ? reason.message : 'Could not refresh the schedule.')
+      throw reason
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   const logout = () => {
     sessionStorage.removeItem(SESSION_KEY)
+    sessionStorage.removeItem(CREDENTIAL_KEY)
     sessionStorage.removeItem(CHAT_SESSION_KEY)
     setChatOpen(false)
     setRefreshOpen(false)
@@ -132,7 +175,7 @@ export default function RhuStudentApp() {
     : view === 'nav'
       ? <NavigationView selected={destination} select={setDestination} camera={camera} setCamera={setCamera} />
       : view === 'classes'
-        ? <ClassesView session={session} requestRefresh={() => setRefreshOpen(true)} />
+        ? <ClassesView session={session} requestRefresh={() => { void refreshSchedule().catch(() => undefined) }} refreshing={refreshing} refreshError={refreshError} />
         : <MenuView />
 
   return (
@@ -141,7 +184,6 @@ export default function RhuStudentApp() {
         <div className="rhu-header-inner">
           <button className="rhu-brand" type="button" onClick={() => setView('home')} aria-label="RHU Student Companion home">
             <img src="/logo.png" alt="Rafik Hariri University" />
-            <span><strong>RHU</strong><small>Student Companion</small></span>
           </button>
           <nav className="rhu-desktop-tabs" aria-label="Primary navigation">
             {navigationItems.map(({ id, label, icon: Icon }) => (
@@ -175,10 +217,7 @@ export default function RhuStudentApp() {
         <RefreshScheduleModal
           username={session.username}
           close={() => setRefreshOpen(false)}
-          refresh={async password => {
-            const schedule = await fetchSchedule(session.username, password)
-            saveSession({ ...session, schedule, fetchedAt: Date.now() })
-          }}
+          refresh={refreshSchedule}
         />
       )}
     </div>
@@ -233,7 +272,7 @@ function SignIn({ onAuthenticate }: { onAuthenticate: (username: string, passwor
             {loading ? <><LoaderCircle className="spin" size={18} />Loading your schedule…</> : <>Sign in securely<ArrowRight size={18} /></>}
           </button>
         </form>
-        <div className="privacy-note"><LockKeyhole size={16} /><span>Your password is sent only to the schedule service and is never saved in this browser.</span></div>
+        <div className="privacy-note"><LockKeyhole size={16} /><span>Your password is kept only in this browser tab so schedule refreshes do not ask again. It is cleared when you log out or close the tab.</span></div>
       </section>
     </main>
   )
@@ -282,26 +321,25 @@ function HomeView({ session, go, openDestination }: { session: StudentSession; g
   )
 }
 
-function NavigationView({ selected, select, camera, setCamera }: { selected: typeof CAMPUS_DESTINATIONS[number]; select: (item: typeof CAMPUS_DESTINATIONS[number]) => void; camera: boolean; setCamera: (value: boolean) => void }) {
+function NavigationView({ selected, select, camera, setCamera }: { selected: typeof CAMPUS_DESTINATIONS[number] | null; select: (item: typeof CAMPUS_DESTINATIONS[number]) => void; camera: boolean; setCamera: (value: boolean) => void }) {
   return (
     <div className="rhu-view">
       <PageHeading kicker="Campus navigation" title="Where do you want to go?" description="Choose a destination, then use live camera guidance to point you in the right direction." />
-      <div className="rhu-alert prototype"><AlertTriangle size={18} /><span><strong>Prototype locations</strong> These four coordinates are temporary and should be replaced before campus use.</span></div>
       <div className="destination-grid">
-        {CAMPUS_DESTINATIONS.map((item, index) => (
-          <button key={item.id} className={selected.id === item.id ? 'selected' : ''} aria-pressed={selected.id === item.id} onClick={() => select(item)}>
-            <span className="destination-icon">{index === 2 ? <Library size={22} /> : index === 3 ? <UtensilsCrossed size={22} /> : <MapPin size={22} />}</span>
-            <span><strong>{item.label}</strong><small>{item.description}</small></span>
-            {selected.id === item.id ? <CheckCircle2 size={20} /> : <ArrowRight size={18} />}
+        {CAMPUS_DESTINATIONS.map(item => (
+          <button key={item.id} className={selected?.id === item.id ? 'selected' : ''} aria-pressed={selected?.id === item.id} onClick={() => select(item)}>
+            <span className="destination-photo"><img src={item.imageSrc} alt={item.imageAlt} /></span>
+            <span className="destination-copy"><strong>{item.label}</strong><small>{item.description}</small></span>
+            <span className="destination-choice" aria-hidden="true">{selected?.id === item.id ? <CheckCircle2 size={20} /> : <ArrowRight size={18} />}</span>
           </button>
         ))}
       </div>
-      <Guide key={selected.id} destination={selected} camera={camera} setCamera={setCamera} />
+      {selected && <Guide key={selected.id} destination={selected} camera={camera} setCamera={setCamera} />}
     </div>
   )
 }
 
-function ClassesView({ session, requestRefresh }: { session: StudentSession; requestRefresh: () => void }) {
+function ClassesView({ session, requestRefresh, refreshing, refreshError }: { session: StudentSession; requestRefresh: () => void; refreshing: boolean; refreshError: string }) {
   const initialDay = currentDay() ?? 'Monday'
   const [day, setDay] = useState<DayName>(initialDay)
   const meetings = session.schedule.meetings.filter(meeting => meeting.day === day).sort((a, b) => a.startMinutes - b.startMinutes)
@@ -313,8 +351,9 @@ function ClassesView({ session, requestRefresh }: { session: StudentSession; req
         kicker="Your timetable"
         title="Classes"
         description={`${session.schedule.courses.length} courses · Updated ${formatUpdated(session.fetchedAt)}`}
-        action={<button className="rhu-secondary" onClick={requestRefresh}><RefreshCw size={17} />Refresh schedule</button>}
+        action={<button className="rhu-secondary" onClick={requestRefresh} disabled={refreshing}>{refreshing ? <><LoaderCircle className="spin" size={17} />Refreshing…</> : <><RefreshCw size={17} />Refresh schedule</>}</button>}
       />
+      {refreshError && <div className="rhu-alert error" role="alert"><AlertTriangle size={17} />{refreshError}</div>}
       <div className="day-tabs" role="tablist" aria-label="Class day">
         {DAYS.map(item => <button role="tab" aria-selected={day === item} className={day === item ? 'active' : ''} key={item} onClick={() => setDay(item)}><span>{item.slice(0, 3)}</span><small>{session.schedule.meetings.filter(meeting => meeting.day === item).length}</small></button>)}
       </div>
@@ -336,8 +375,7 @@ function ClassesView({ session, requestRefresh }: { session: StudentSession; req
 function MenuView() {
   return (
     <div className="rhu-view">
-      <PageHeading kicker="RHU cafeteria" title="Today’s menu" description="A simple look at what’s available around campus." action={<span className="sample-badge">Sample menu · USD</span>} />
-      <div className="rhu-alert info"><Coffee size={18} /><span>Items and prices are illustrative until a live cafeteria source is connected.</span></div>
+      <PageHeading kicker="RHU cafeteria" title="Today’s menu" description="A simple look at what’s available around campus." />
       <div className="menu-sections">
         {MENU_CATEGORIES.map(category => <section key={category}><div className="menu-category-heading"><h2>{category}</h2><span>{CAFETERIA_MENU.filter(item => item.category === category).length} items</span></div><div className="menu-grid">{CAFETERIA_MENU.filter(item => item.category === category).map(item => <article className="menu-card" key={item.id}><div><span className="menu-item-icon">{category === 'Drinks' ? <Coffee size={19} /> : <UtensilsCrossed size={19} />}</span><h3>{item.name}</h3><p>{item.description}</p></div><strong>${item.price.toFixed(2)}</strong></article>)}</div></section>)}
       </div>
@@ -376,7 +414,7 @@ function RefreshScheduleModal({ username, close, refresh }: { username: string; 
     }
   }
 
-  return <div className="rhu-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) close() }}><section className="rhu-modal" role="dialog" aria-modal="true" aria-labelledby="refresh-title"><button className="modal-close-rhu" onClick={close} aria-label="Close"><X size={20} /></button><span className="rhu-kicker">Secure refresh</span><h2 id="refresh-title">Update your schedule</h2><p>Re-enter your password for student ID <strong>{username}</strong>. It will not be saved.</p><form onSubmit={submit}><label>Password<input ref={inputRef} type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} /></label>{error && <div className="rhu-alert error" role="alert"><AlertTriangle size={17} />{error}</div>}<button className="rhu-primary" disabled={!password || loading}>{loading ? <><LoaderCircle className="spin" size={17} />Refreshing…</> : <><RefreshCw size={17} />Refresh schedule</>}</button></form></section></div>
+  return <div className="rhu-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) close() }}><section className="rhu-modal" role="dialog" aria-modal="true" aria-labelledby="refresh-title"><button className="modal-close-rhu" onClick={close} aria-label="Close"><X size={20} /></button><span className="rhu-kicker">Secure refresh</span><h2 id="refresh-title">Update your schedule</h2><p>Enter your password once for student ID <strong>{username}</strong>. It will be reused for refreshes in this tab.</p><form onSubmit={submit}><label>Password<input ref={inputRef} type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} /></label>{error && <div className="rhu-alert error" role="alert"><AlertTriangle size={17} />{error}</div>}<button className="rhu-primary" disabled={!password || loading}>{loading ? <><LoaderCircle className="spin" size={17} />Refreshing…</> : <><RefreshCw size={17} />Refresh schedule</>}</button></form></section></div>
 }
 
 function ChatDrawer({ open, close }: { open: boolean; close: () => void }) {
@@ -436,5 +474,5 @@ function ChatDrawer({ open, close }: { open: boolean; close: () => void }) {
   }
 
   if (!open) return null
-  return <div className="chat-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) close() }}><aside ref={panelRef} className="chat-drawer" role="dialog" aria-modal="true" aria-labelledby="chat-title"><header><span className="assistant-avatar"><Bot size={21} /></span><div><h2 id="chat-title">Campus Assistant</h2><p>{isChatConfigured ? 'Powered by RHU’s n8n assistant' : 'Connection pending'}</p></div><button ref={closeRef} onClick={close} aria-label="Close Campus Assistant"><X size={21} /></button></header>{!isChatConfigured ? <div className="chat-unavailable"><span><Bot size={28} /></span><h3>Assistant coming soon</h3><p>The chat interface is ready. Add the n8n POST URL to <code>VITE_CHAT_API_URL</code> to start conversations.</p></div> : <><div className="chat-messages" ref={messagesRef} aria-live="polite">{messages.map(message => <div className={`chat-message ${message.role}`} key={message.id}><span>{message.text}</span></div>)}{pending && <div className="chat-message assistant pending"><span><i /><i /><i /></span></div>}</div><div className="chat-compose">{error && <div className="chat-error" role="alert"><span>{error}</span><button onClick={() => void deliver(failedMessage, false)}>Retry</button></div>}<div className="chat-input"><textarea rows={1} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void deliver(draft, true) } }} placeholder="Ask about RHU…" aria-label="Message Campus Assistant" /><button disabled={!draft.trim() || pending} onClick={() => void deliver(draft, true)} aria-label="Send message"><Send size={18} /></button></div><small>Enter to send · Shift + Enter for a new line</small></div></>}</aside></div>
+  return <div className="chat-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) close() }}><aside ref={panelRef} className="chat-drawer" role="dialog" aria-modal="true" aria-labelledby="chat-title"><header><span className="assistant-avatar"><Bot size={21} /></span><div><h2 id="chat-title">Campus Assistant</h2></div><button ref={closeRef} onClick={close} aria-label="Close Campus Assistant"><X size={21} /></button></header>{!isChatConfigured ? <div className="chat-unavailable"><span><Bot size={28} /></span></div> : <><div className="chat-messages" ref={messagesRef} aria-live="polite">{messages.map(message => <div className={`chat-message ${message.role}`} key={message.id}><span>{message.text}</span></div>)}{pending && <div className="chat-message assistant pending"><span><i /><i /><i /></span></div>}</div><div className="chat-compose">{error && <div className="chat-error" role="alert"><span>{error}</span><button onClick={() => void deliver(failedMessage, false)}>Retry</button></div>}<div className="chat-input"><textarea rows={1} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void deliver(draft, true) } }} placeholder="Ask about RHU…" aria-label="Message Campus Assistant" /><button disabled={!draft.trim() || pending} onClick={() => void deliver(draft, true)} aria-label="Send message"><Send size={18} /></button></div><small>Enter to send · Shift + Enter for a new line</small></div></>}</aside></div>
 }

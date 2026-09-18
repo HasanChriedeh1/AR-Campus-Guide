@@ -28,13 +28,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function renderAuthenticated() {
+function renderAuthenticated(password?: string) {
   sessionStorage.setItem('rhu-student-session-v1', JSON.stringify(authenticatedSession))
+  if (password) sessionStorage.setItem('rhu-student-credential-v1', JSON.stringify({ username: authenticatedSession.username, password }))
   return render(<RhuStudentApp />)
 }
 
 describe('RHU student experience', () => {
-  it('signs in through the schedule webhook without persisting the password', async () => {
+  it('signs in through the schedule webhook and retains the password for this tab', async () => {
     vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => webhookPayload } as Response)
     render(<RhuStudentApp />)
 
@@ -48,6 +49,7 @@ describe('RHU student experience', () => {
       body: JSON.stringify({ Username: 'student-demo', Password: 'temporary-secret' }),
     }))
     expect(sessionStorage.getItem('rhu-student-session-v1')).not.toContain('temporary-secret')
+    expect(sessionStorage.getItem('rhu-student-credential-v1')).toContain('temporary-secret')
   })
 
   it('shows authentication failures without creating a session', async () => {
@@ -77,34 +79,54 @@ describe('RHU student experience', () => {
     expect(screen.getByRole('dialog', { name: 'Update your schedule' })).toBeTruthy()
   })
 
-  it('refreshes with a transient password and never stores it', async () => {
+  it('refreshes directly with the password saved at sign-in', async () => {
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => webhookPayload } as Response)
+    renderAuthenticated('saved-secret')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Classes' })[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh schedule' }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/schedule', expect.objectContaining({ body: JSON.stringify({ Username: 'student-demo', Password: 'saved-secret' }) })))
+    expect(screen.queryByRole('dialog', { name: 'Update your schedule' })).toBeNull()
+  })
+
+  it('saves a password entered by an existing session and reuses it next time', async () => {
     vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => webhookPayload } as Response)
     renderAuthenticated()
     fireEvent.click(screen.getAllByRole('button', { name: 'Classes' })[0])
     fireEvent.click(screen.getByRole('button', { name: 'Refresh schedule' }))
     const dialog = screen.getByRole('dialog', { name: 'Update your schedule' })
-    fireEvent.change(within(dialog).getByLabelText('Password'), { target: { value: 'refresh-only-secret' } })
+    fireEvent.change(within(dialog).getByLabelText('Password'), { target: { value: 'one-time-secret' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Refresh schedule' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Update your schedule' })).toBeNull())
-    expect(fetch).toHaveBeenCalledWith('/api/schedule', expect.objectContaining({ body: JSON.stringify({ Username: 'student-demo', Password: 'refresh-only-secret' }) }))
-    expect(sessionStorage.getItem('rhu-student-session-v1')).not.toContain('refresh-only-secret')
+    expect(sessionStorage.getItem('rhu-student-credential-v1')).toContain('one-time-secret')
+    vi.mocked(fetch).mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh schedule' }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/schedule', expect.objectContaining({ body: JSON.stringify({ Username: 'student-demo', Password: 'one-time-secret' }) })))
   })
 
-  it('provides four destination presets and removes custom-coordinate entry', () => {
+  it('provides five unselected photo destinations without implementation notes', () => {
     renderAuthenticated()
     fireEvent.click(screen.getAllByRole('button', { name: 'Nav' })[0])
-    for (const label of ['Block C', 'Block I', 'Library', 'Cafeteria']) expect(screen.getByRole('button', { name: new RegExp(label) })).toBeTruthy()
+    for (const label of ['Finance', 'Cafeteria', 'Block C', 'Library', 'Admissions']) {
+      expect(screen.getByRole('button', { name: new RegExp(label) }).getAttribute('aria-pressed')).toBe('false')
+    }
+    expect(screen.queryByRole('button', { name: /Block I/ })).toBeNull()
+    for (const image of ['Finance office', 'cafeteria building', 'Block C', 'RHU Library', 'Admissions Office']) expect(screen.getByRole('img', { name: new RegExp(image, 'i') })).toBeTruthy()
     expect(screen.queryByText(/custom coordinate/i)).toBeNull()
-    expect(screen.getByText(/Prototype locations/)).toBeTruthy()
+    expect(screen.queryByText(/Demo coordinate/)).toBeNull()
+    expect(screen.queryByText('Selected destination')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Finance/ }))
+    expect(screen.getByRole('heading', { name: 'Finance' })).toBeTruthy()
   })
 
-  it('shows the sample USD menu and the unconfigured chat state', async () => {
+  it('shows the cafeteria menu without exposing assistant setup notes', async () => {
     renderAuthenticated()
     fireEvent.click(screen.getAllByRole('button', { name: 'Menu' })[0])
     expect(screen.getByText('Chicken shawarma plate')).toBeTruthy()
     expect(screen.getByText('$6.50')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Open Campus Assistant' }))
-    expect(await screen.findByText('Assistant coming soon')).toBeTruthy()
+    expect(await screen.findByRole('dialog', { name: 'Campus Assistant' })).toBeTruthy()
+    expect(screen.queryByText(/Connection pending|Assistant coming soon|n8n|VITE_CHAT_API_URL/)).toBeNull()
   })
 
   it('clears schedule and chat session data on logout', async () => {
@@ -113,6 +135,7 @@ describe('RHU student experience', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Sign in to continue' })).toBeTruthy())
     expect(sessionStorage.getItem('rhu-student-session-v1')).toBeNull()
+    expect(sessionStorage.getItem('rhu-student-credential-v1')).toBeNull()
     expect(sessionStorage.getItem('rhu-chat-session-v1')).toBeNull()
   })
 })
