@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, ArrowUp, Bot, CalendarDays, Camera, Check, ChevronDown, CircleAlert, Compass, CornerDownRight, Edit3, LayoutDashboard, LocateFixed, MapPin, Navigation, Plus, RefreshCw, RotateCcw, Send, Sparkles, Target, Trash2, X } from 'lucide-react'
+import { ArrowRight, ArrowUp, Bot, CalendarDays, Camera, Check, ChevronDown, CircleAlert, Compass, CornerDownRight, Edit3, LayoutDashboard, LocateFixed, MapPin, Navigation, Plus, RefreshCw, RotateCcw, Send, Sparkles, Trash2, X } from 'lucide-react'
 import type { DayName, Enrollment, Meeting, ScheduleResponse } from './types'
 import { bearingBetween, compassHeadingFromOrientation, distanceInMeters, formatDistance, getNavigationGuidance, normalizeDegrees, signedRelativeBearing, smoothHeading, unwrapDegrees } from './navigation'
 import type { CampusWalkingRoute, LiveHeading, LivePosition, NavigationDestination } from './navigation'
-import './campus.css'
 import './campus-route.css'
 
 const DEMO: Enrollment[] = ['BIOM502','BIOM519','BIOM521','BIOM522','ECE595A','CCEE534','ENGR510'].map((course, index) => ({ course, section: index === 5 ? '2' : '1' }))
@@ -76,7 +75,7 @@ type DeviceOrientationConstructor = typeof DeviceOrientationEvent & {
   requestPermission?: (absolute?: boolean) => Promise<'granted' | 'denied'>
 }
 
-function Guide({ destination: defaultDestination, camera, setCamera }: { destination: NavigationDestination; camera: boolean; setCamera: (value: boolean) => void }) {
+export function Guide({ destination: defaultDestination, camera, setCamera }: { destination: NavigationDestination; camera: boolean; setCamera: (value: boolean) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const watchIdRef = useRef<number | null>(null)
   const locationPollRef = useRef<number | null>(null)
@@ -99,35 +98,9 @@ function Guide({ destination: defaultDestination, camera, setCamera }: { destina
   const [arrivalFixes, setArrivalFixes] = useState(0)
   const [cameraError, setCameraError] = useState('')
   const [cameraAttempt, setCameraAttempt] = useState(0)
-  const [destination, setDestination] = useState(defaultDestination)
-  const [showCoordinateForm, setShowCoordinateForm] = useState(false)
-  const [customCoordinate, setCustomCoordinate] = useState({ lat: '', lng: '' })
-  const [coordinateError, setCoordinateError] = useState('')
+  const destination = defaultDestination
   const route: CampusWalkingRoute | null = null
   const guidance = useMemo(() => position ? getNavigationGuidance(position, destination, route) : null, [destination, position, route])
-
-  const applyCustomCoordinate = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const lat = Number(customCoordinate.lat)
-    const lng = Number(customCoordinate.lng)
-    if (!customCoordinate.lat.trim() || !customCoordinate.lng.trim() || !Number.isFinite(lat) || !Number.isFinite(lng)) {
-      setCoordinateError('Enter a valid latitude and longitude.')
-      return
-    }
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      setCoordinateError('Latitude must be between −90 and 90; longitude between −180 and 180.')
-      return
-    }
-    setDestination({ id: 'custom-coordinate', label: 'Custom coordinate', coordinate: { lat, lng } })
-    setCoordinateError('')
-    setShowCoordinateForm(false)
-  }
-
-  const useDefaultDestination = () => {
-    setDestination(defaultDestination)
-    setCoordinateError('')
-    setShowCoordinateForm(false)
-  }
 
   const clearCompassTimeout = useCallback(() => {
     if (compassTimeoutRef.current !== null) {
@@ -529,7 +502,30 @@ function Guide({ destination: defaultDestination, camera, setCamera }: { destina
     )
   }
 
-  return <div className="view"><div className="guide-hero route-hero"><div className="grid-pattern" /><div className="guide-copy"><div className="eyebrow light"><i />Campus Guide / Live guidance</div><h1>Your position<br /><em>to your destination.</em></h1><p>Use your live location and compass to point directly to Student Parking or a coordinate you enter.</p></div><div className="route-orbit"><Target size={24} /><span>C</span><i /><span>B</span></div></div><div className="route-summary"><div className="route-point"><span className="point-pin start-pin">C</span><div><small>CURRENT POSITION</small><b>{position ? 'Your live location' : 'Live location not acquired'}</b><em>{position ? `${position.lat.toFixed(4)}, ${position.lng.toFixed(4)} · ±${Math.round(position.accuracy)} m` : 'Start camera navigation for a fresh GPS position'}</em></div></div><ArrowRight className="route-line" size={18} /><div className="route-point"><span className="point-pin end-pin">B</span><div><small>DESTINATION</small><b>{destination.label}</b><em>{destination.coordinate.lat.toFixed(4)}, {destination.coordinate.lng.toFixed(4)}</em></div></div></div><section className="custom-coordinate panel"><div><span className="section-label">CUSTOM DESTINATION</span><b>Navigate to another coordinate</b><small>Enter decimal latitude and longitude.</small></div><div className="coordinate-controls"><button className="outline" type="button" aria-expanded={showCoordinateForm} onClick={() => { setShowCoordinateForm(value => !value); setCoordinateError('') }}><Plus size={15} />{showCoordinateForm ? 'Close' : 'Add custom coordinate'}</button>{destination.id === 'custom-coordinate' && <button className="text-button" type="button" onClick={useDefaultDestination}>Use Student Parking</button>}</div>{showCoordinateForm && <form className="coordinate-form" onSubmit={applyCustomCoordinate} noValidate><label>Latitude<input aria-label="Latitude" inputMode="decimal" placeholder="33.713146" value={customCoordinate.lat} onChange={event => setCustomCoordinate(value => ({ ...value, lat: event.target.value }))} /></label><label>Longitude<input aria-label="Longitude" inputMode="decimal" placeholder="35.482796" value={customCoordinate.lng} onChange={event => setCustomCoordinate(value => ({ ...value, lng: event.target.value }))} /></label><button className="small-primary" type="submit">Use coordinate</button>{coordinateError && <p className="coordinate-error" role="alert">{coordinateError}</p>}</form>}</section><div className="route-metrics"><div><span>Distance</span><b>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</b></div><div><span>Direction</span><b>{guidance ? `${Math.round(guidance.bearing)}°` : '—'}</b></div><div><span>Route status</span><b className={`location-state ${locationState === 'unavailable' || locationState === 'denied' || locationState === 'error' ? 'unavailable' : ''}`}>{locationLabel}</b></div></div><div className="route-actions"><button className="primary" onClick={startNavigation}><Camera size={15} />Start camera route <ArrowRight size={15} /></button><button className="outline" onClick={requestSingleLocation}><LocateFixed size={15} />{locationState === 'acquiring' ? 'Locating...' : 'Use live location'}</button></div><div className="footnote"><CircleAlert size={15} />Guidance points directly to the selected coordinate. Campus walking routes can later provide the same camera overlay with path-aware turns.</div></div>
+  return (
+    <div className="guide-live-panel">
+      <div className="guide-live-copy">
+        <span className="rhu-kicker">Selected destination</span>
+        <h2>{destination.label}</h2>
+        <p>Use live GPS and your phone compass for direct, camera-assisted guidance.</p>
+      </div>
+      <div className="guide-live-route">
+        <div><span className="guide-point">You</span><small>{position ? `±${Math.round(position.accuracy)} m accuracy` : 'Live location not acquired'}</small></div>
+        <ArrowRight size={18} aria-hidden="true" />
+        <div><span className="guide-point destination-point"><MapPin size={16} /></span><small>{destination.label}</small></div>
+      </div>
+      <div className="guide-live-metrics">
+        <div><span>Distance</span><strong>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</strong></div>
+        <div><span>Direction</span><strong>{guidance ? `${Math.round(guidance.bearing)}°` : '—'}</strong></div>
+        <div><span>Status</span><strong>{locationLabel}</strong></div>
+      </div>
+      {locationError && <div className="rhu-alert error" role="alert"><CircleAlert size={17} />{locationError}</div>}
+      <div className="guide-live-actions">
+        <button className="rhu-primary" onClick={startNavigation}><Camera size={17} />Start camera route</button>
+        <button className="rhu-secondary" onClick={requestSingleLocation}><LocateFixed size={17} />{locationState === 'acquiring' ? 'Locating…' : 'Use live location'}</button>
+      </div>
+    </div>
+  )
 }
 
 function headingFromEvent(event: DeviceOrientationEvent) {

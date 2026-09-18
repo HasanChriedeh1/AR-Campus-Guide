@@ -98,24 +98,11 @@ function sendOrientation(
 }
 
 describe('live camera navigation', () => {
-  it('accepts a validated custom destination coordinate and keeps the preset available', () => {
+  it('keeps navigation fixed to the selected preset and removes custom coordinates', () => {
     render(<CampusMateApp />)
     fireEvent.click(screen.getAllByRole('button', { name: 'Campus Guide' })[0])
-    fireEvent.click(screen.getByRole('button', { name: 'Add custom coordinate' }))
-
-    fireEvent.change(screen.getByRole('textbox', { name: 'Latitude' }), { target: { value: '91' } })
-    fireEvent.change(screen.getByRole('textbox', { name: 'Longitude' }), { target: { value: '35.5' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Use coordinate' }))
-    expect(screen.getByRole('alert').textContent).toContain('Latitude must be between')
-
-    fireEvent.change(screen.getByRole('textbox', { name: 'Latitude' }), { target: { value: '33.7001' } })
-    fireEvent.change(screen.getByRole('textbox', { name: 'Longitude' }), { target: { value: '35.5002' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Use coordinate' }))
-
-    expect(screen.getByText('Custom coordinate')).toBeTruthy()
-    expect(screen.getByText('33.7001, 35.5002')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Use Student Parking' }))
-    expect(screen.getByText('Student Parking · Point B')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Student Parking · Point B' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add custom coordinate' })).toBeNull()
   })
 
   it('uses fresh GPS and an approved compass event to render a live, screen-relative arrow', async () => {

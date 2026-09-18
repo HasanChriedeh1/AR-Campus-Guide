@@ -7,9 +7,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/api/schedule': {
-        target: 'https://batish53.app.n8n.cloud',
+        target: 'https://hasanchriedeh.app.n8n.cloud',
         changeOrigin: true,
-        rewrite: () => '/webhook/Campus-Guide-Schedule',
+        rewrite: () => '/webhook-test/50b9be8b-c068-437d-82d9-ba5718007736',
       },
     },
   },
