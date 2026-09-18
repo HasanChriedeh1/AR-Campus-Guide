@@ -46,6 +46,8 @@ export type HeadingSource = 'compass' | 'course'
 export type LiveHeading = {
   degrees: number
   source: HeadingSource
+  /** Used to fall back to GPS travel direction if compass events stop. */
+  updatedAt: number
 }
 
 const EARTH_RADIUS_METERS = 6_371_000

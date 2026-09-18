@@ -116,4 +116,23 @@ describe('live camera navigation', () => {
     expect(await screen.findByText('walking direction')).toBeTruthy()
     expect(screen.queryByText('—')).toBeNull()
   })
+
+  it('updates from regular deviceorientation events that do not expose the absolute flag', async () => {
+    openCameraRoute()
+    await waitFor(() => expect(requestMotionPermission).toHaveBeenCalledTimes(1))
+    sendPosition()
+
+    const firstOrientation = new Event('deviceorientation')
+    Object.defineProperty(firstOrientation, 'alpha', { value: 0 })
+    act(() => window.dispatchEvent(firstOrientation))
+
+    expect(await screen.findByText('phone compass')).toBeTruthy()
+    expect(screen.getByLabelText(/Turn 90 degrees/)).toBeTruthy()
+
+    const nextOrientation = new Event('deviceorientation')
+    Object.defineProperty(nextOrientation, 'alpha', { value: 90 })
+    act(() => window.dispatchEvent(nextOrientation))
+
+    expect(screen.getByLabelText(/^Turn/).getAttribute('aria-label')).not.toBe('Turn 90 degrees')
+  })
 })

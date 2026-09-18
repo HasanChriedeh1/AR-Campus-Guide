@@ -17,6 +17,7 @@ const STUDENT_PARKING: NavigationDestination = {
 }
 const LOCATION_OPTIONS: PositionOptions = { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 }
 const GPS_LOCK_ACCURACY_METERS = 50
+const COMPASS_STALE_AFTER_MS = 1_500
 const DEMO_SCHEDULE: ScheduleResponse = {
   semester: 'Fall 2026–27',
   enrolledCourses: [{ course: 'BIOM502', section: '1' }],
@@ -111,9 +112,12 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
 
   const saveHeading = useCallback((degrees: number, source: LiveHeading['source']) => {
     const current = headingRef.current
-    if (source === 'course' && current?.source === 'compass') return
+    const updatedAt = Date.now()
+    // A compass reading should win while it is arriving, but a stale reading
+    // must not freeze the arrow when GPS has a fresh travel direction.
+    if (source === 'course' && current?.source === 'compass' && updatedAt - current.updatedAt < COMPASS_STALE_AFTER_MS) return
     const previous = current?.source === source ? current.degrees : null
-    const next = { degrees: smoothHeading(previous, normalizeDegrees(degrees)), source }
+    const next = { degrees: smoothHeading(previous, normalizeDegrees(degrees), 0.45), source, updatedAt }
     headingRef.current = next
     setHeading(next)
   }, [])
@@ -297,7 +301,7 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
   const routeMessage = serviceErrors || (!guidance ? 'Getting a fresh GPS position. Keep precise location enabled.' : !heading ? compassState === 'denied' ? 'Compass access was denied. Enable Motion & Orientation access, then start again.' : compassState === 'unavailable' ? 'Compass is unavailable. Start walking to use your travel direction instead.' : 'Calibrating your compass. Hold the phone upright and move it in a figure eight.' : `${guidance.instruction}. Keep the arrow centered as you walk.`)
 
   if (camera) {
-    return <div className="camera-route"><video ref={videoRef} autoPlay playsInline muted /><div className="camera-tint" /><button className="camera-exit" onClick={exitNavigation}><X size={17} />Exit navigation</button>{turn !== null && <div className="route-arrow"><span className="route-arrow-ring" style={{ transform: `rotate(${turn}deg)` }}><ArrowUp size={31} strokeWidth={2.7} /></span><span className="route-arrow-label">{Math.round(turn)}°</span></div>}<div className="camera-overlay"><div className="camera-status"><i className="live" />LIVE ROUTE / {locationLabel}</div><div className="route-readout"><div><b>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</b><span>to {destination.label}</span></div><div><b>{turn === null ? '—' : `${Math.round(turn)}°`}</b><span>{compassLabel}</span></div></div><p>{routeMessage}</p><button className="outline light" onClick={exitNavigation}>Back to route details</button></div></div>
+    return <div className="camera-route apple-navigation"><video ref={videoRef} autoPlay playsInline muted /><div className="camera-tint" /><header className="apple-navigation-header"><button className="apple-nav-end" aria-label="Exit navigation" onClick={exitNavigation}><X size={16} />End</button><div className="apple-nav-status"><i className="live" />{locationLabel}</div></header>{turn !== null && <div className="route-arrow" aria-label={`Turn ${Math.round(turn)} degrees`}><span className="route-arrow-ring" style={{ transform: `rotate(${turn}deg)` }}><ArrowUp size={32} strokeWidth={2.8} /></span><span className="route-arrow-label">{Math.round(turn)}°</span></div>}<section className="camera-overlay apple-route-card" aria-live="polite"><div className="apple-route-instruction"><span className="apple-maneuver"><ArrowUp size={25} strokeWidth={2.8} /></span><div><b>{guidance?.instruction ?? 'Finding your route'}</b><span>{routeMessage}</span></div><strong>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</strong></div><div className="apple-route-meta"><span>to {destination.label}</span><div><span>{turn === null ? 'Calibrating' : `${Math.round(turn)}°`}</span><small>{compassLabel}</small></div></div><div className="apple-route-footer"><span><b>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</b> remaining</span><button onClick={exitNavigation}>End route</button></div></section></div>
   }
 
   return <div className="view"><div className="guide-hero route-hero"><div className="grid-pattern" /><div className="guide-copy"><div className="eyebrow light"><i />Campus Guide / Live guidance</div><h1>Your position<br /><em>to Point B.</em></h1><p>Use your live location and compass to point directly to the BIOM502 class at Student Parking.</p></div><div className="route-orbit"><Target size={24} /><span>C</span><i /><span>B</span></div></div><div className="route-summary"><div className="route-point"><span className="point-pin start-pin">C</span><div><small>CURRENT POSITION</small><b>{position ? 'Your live location' : 'Live location not acquired'}</b><em>{position ? `${position.lat.toFixed(4)}, ${position.lng.toFixed(4)} · ±${Math.round(position.accuracy)} m` : 'Start camera navigation for a fresh GPS position'}</em></div></div><ArrowRight className="route-line" size={18} /><div className="route-point"><span className="point-pin end-pin">B</span><div><small>DESTINATION</small><b>{destination.label}</b><em>{destination.coordinate.lat.toFixed(4)}, {destination.coordinate.lng.toFixed(4)}</em></div></div></div><div className="route-metrics"><div><span>Distance</span><b>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</b></div><div><span>Direction</span><b>{guidance ? `${Math.round(guidance.bearing)}°` : '—'}</b></div><div><span>Route status</span><b className={`location-state ${locationState === 'unavailable' || locationState === 'denied' || locationState === 'error' ? 'unavailable' : ''}`}>{locationLabel}</b></div></div><div className="route-actions"><button className="primary" onClick={startNavigation}><Camera size={15} />Start camera route <ArrowRight size={15} /></button><button className="outline" onClick={requestSingleLocation}><LocateFixed size={15} />{locationState === 'acquiring' ? 'Locating...' : 'Use live location'}</button></div><div className="footnote"><CircleAlert size={15} />Guidance points directly to Student Parking today. Campus walking routes can later provide the same camera overlay with path-aware turns.</div></div>
@@ -306,8 +310,11 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
 function headingFromEvent(event: DeviceOrientationEvent) {
   const webkitEvent = event as DeviceOrientationEvent & { webkitCompassHeading?: number; webkitCompassAccuracy?: number }
   if (typeof webkitEvent.webkitCompassHeading === 'number' && Number.isFinite(webkitEvent.webkitCompassHeading) && (webkitEvent.webkitCompassAccuracy === undefined || webkitEvent.webkitCompassAccuracy >= 0)) return normalizeDegrees(webkitEvent.webkitCompassHeading)
-  if (event.type !== 'deviceorientationabsolute' || !event.absolute || typeof event.alpha !== 'number' || !Number.isFinite(event.alpha)) return null
-  const screenAngle = window.screen.orientation?.angle ?? 0
+  // Chrome commonly sends `deviceorientation` with alpha but without an
+  // `absolute` flag. Rejecting it means the on-screen arrow never updates.
+  if (typeof event.alpha !== 'number' || !Number.isFinite(event.alpha)) return null
+  const legacyScreenAngle = (window as Window & { orientation?: number }).orientation
+  const screenAngle = window.screen.orientation?.angle ?? (typeof legacyScreenAngle === 'number' ? legacyScreenAngle : 0)
   return normalizeDegrees(360 - event.alpha + screenAngle)
 }
 function Assistant() { const prompts = ['Where is my next class?', 'What should I do now?', 'I have 40 minutes before class.', 'Take me to Student Parking.']; const [message, setMessage] = useState(''); return <div className="view"><div className="assistant-heading"><span className="assistant-orb"><Bot size={26} /></span><div><div className="eyebrow"><i />CampusMate intelligence</div><h1>Ask your <em>companion.</em></h1><p>The n8n AI agent will live here next.</p></div><b className="coming">COMING SOON</b></div><div className="panel chat"><div className="chat-intro"><Sparkles size={18} /><h2>Ready when you are.</h2><p>Connect a future AI Agent webhook to make this space conversational.</p></div><div className="prompts">{prompts.map(prompt => <button key={prompt} onClick={() => setMessage(prompt)}>{prompt}<ArrowRight size={14} /></button>)}</div><div className="composer"><input value={message} onChange={e => setMessage(e.target.value)} placeholder="Ask CampusMate anything..." /><button disabled={!message}><Send size={16} /></button></div><small className="disclaimer"><CircleAlert size={13} />No AI agent is connected in this preview. Your message will not be sent.</small></div></div> }
