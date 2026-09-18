@@ -27,8 +27,8 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 1;
-  filter: none;
+  opacity: .62;
+  filter: saturate(.7) contrast(.92);
   transition: opacity .35s ease, filter .35s ease;
 }
 
@@ -40,13 +40,13 @@
   position: absolute;
   inset: 0;
   z-index: 1;
-  background: transparent;
+  background: #ffffffa8;
   transition: background .35s ease;
 }
 
 .apple-navigation.is-aligned .camera-tint,
 .apple-navigation.is-arrived .camera-tint {
-  background: transparent;
+  background: #eee6f1b8;
 }
 
 .precision-header {
