@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, ArrowUp, Bot, CalendarDays, Camera, ChevronDown, CircleAlert, Compass, CornerDownRight, Edit3, LayoutDashboard, LocateFixed, MapPin, Navigation, Plus, RefreshCw, RotateCcw, Send, Sparkles, Target, Trash2, X } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ArrowRight, ArrowUp, Bot, CalendarDays, Camera, Check, ChevronDown, CircleAlert, Compass, CornerDownRight, Edit3, LayoutDashboard, LocateFixed, MapPin, Navigation, Plus, RefreshCw, RotateCcw, Send, Sparkles, Target, Trash2, X } from 'lucide-react'
 import type { DayName, Enrollment, Meeting, ScheduleResponse } from './types'
-import { bearingBetween, distanceInMeters, formatDistance, getNavigationGuidance, normalizeDegrees, relativeBearing, smoothHeading } from './navigation'
+import { bearingBetween, compassHeadingFromOrientation, distanceInMeters, formatDistance, getNavigationGuidance, normalizeDegrees, signedRelativeBearing, smoothHeading, unwrapDegrees } from './navigation'
 import type { CampusWalkingRoute, LiveHeading, LivePosition, NavigationDestination } from './navigation'
 import './campus.css'
 import './campus-route.css'
@@ -19,7 +19,13 @@ const LOCATION_OPTIONS: PositionOptions = { enableHighAccuracy: true, maximumAge
 const POLLED_LOCATION_OPTIONS: PositionOptions = { enableHighAccuracy: true, maximumAge: 0, timeout: 4_000 }
 const GPS_LOCK_ACCURACY_METERS = 50
 const COMPASS_STALE_AFTER_MS = 1_500
+const COURSE_STALE_AFTER_MS = 5_000
 const LOCATION_POLL_INTERVAL_MS = 1_250
+const ALIGNED_THRESHOLD_DEGREES = 15
+const NEARBY_DISTANCE_METERS = 10
+const ARRIVAL_DISTANCE_METERS = 3
+const ARRIVAL_ACCURACY_METERS = 10
+const ARRIVAL_FIX_COUNT = 3
 const DEMO_SCHEDULE: ScheduleResponse = {
   semester: 'Fall 2026–27',
   enrolledCourses: [{ course: 'BIOM502', section: '1' }],
@@ -65,7 +71,7 @@ function Editor({ items, original, onChange, add, setAdd, save, restore, status 
 type LocationState = 'idle' | 'acquiring' | 'live' | 'weak' | 'denied' | 'unavailable' | 'error'
 type CompassState = 'idle' | 'acquiring' | 'active' | 'denied' | 'unavailable'
 type DeviceOrientationConstructor = typeof DeviceOrientationEvent & {
-  requestPermission?: () => Promise<'granted' | 'denied'>
+  requestPermission?: (absolute?: boolean) => Promise<'granted' | 'denied'>
 }
 
 function Guide({ destination, camera, setCamera }: { destination: NavigationDestination; camera: boolean; setCamera: (value: boolean) => void }) {
@@ -75,16 +81,21 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
   const locationPollPendingRef = useRef(false)
   const latestPositionRef = useRef<LivePosition | null>(null)
   const orientationListenerRef = useRef<((event: DeviceOrientationEvent) => void) | null>(null)
-  const lastAbsoluteHeadingAtRef = useRef(0)
   const compassTimeoutRef = useRef<number | null>(null)
   const headingRef = useRef<LiveHeading | null>(null)
+  const latestCourseHeadingRef = useRef<LiveHeading | null>(null)
+  const displayRotationRef = useRef<number | null>(null)
+  const arrowIconRef = useRef<SVGSVGElement>(null)
+  const arrivalFixesRef = useRef(0)
   const navigationSessionRef = useRef(0)
   const [position, setPosition] = useState<LivePosition | null>(null)
   const [locationState, setLocationState] = useState<LocationState>('idle')
   const [locationError, setLocationError] = useState('')
   const [compassState, setCompassState] = useState<CompassState>('idle')
   const [heading, setHeading] = useState<LiveHeading | null>(null)
+  const [arrivalFixes, setArrivalFixes] = useState(0)
   const [cameraError, setCameraError] = useState('')
+  const [cameraAttempt, setCameraAttempt] = useState(0)
   const route: CampusWalkingRoute | null = null
   const guidance = useMemo(() => position ? getNavigationGuidance(position, destination, route) : null, [destination, position, route])
 
@@ -124,14 +135,34 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
   const saveHeading = useCallback((degrees: number, source: LiveHeading['source']) => {
     const current = headingRef.current
     const updatedAt = Date.now()
+    const normalized = normalizeDegrees(degrees)
+    const sourcePrevious = source === 'course'
+      ? latestCourseHeadingRef.current?.degrees ?? null
+      : current?.source === 'compass' ? current.degrees : null
+    const next = { degrees: smoothHeading(sourcePrevious, normalized, 0.45), source, updatedAt }
+
+    if (source === 'course') latestCourseHeadingRef.current = next
     // A compass reading should win while it is arriving, but a stale reading
     // must not freeze the arrow when GPS has a fresh travel direction.
     if (source === 'course' && current?.source === 'compass' && updatedAt - current.updatedAt < COMPASS_STALE_AFTER_MS) return
-    const previous = current?.source === source ? current.degrees : null
-    const next = { degrees: smoothHeading(previous, normalizeDegrees(degrees), 0.45), source, updatedAt }
     headingRef.current = next
     setHeading(next)
   }, [])
+
+  const armCompassFreshnessWatchdog = useCallback(() => {
+    clearCompassTimeout()
+    compassTimeoutRef.current = window.setTimeout(() => {
+      const course = latestCourseHeadingRef.current
+      if (course && Date.now() - course.updatedAt <= COURSE_STALE_AFTER_MS) {
+        headingRef.current = course
+        setHeading(course)
+      } else if (headingRef.current?.source === 'compass') {
+        headingRef.current = null
+        setHeading(null)
+      }
+      setCompassState('unavailable')
+    }, COMPASS_STALE_AFTER_MS)
+  }, [clearCompassTimeout])
 
   const savePosition = useCallback((coords: GeolocationCoordinates, timestamp: number) => {
     const course = typeof coords.heading === 'number' && Number.isFinite(coords.heading) && coords.heading >= 0 ? normalizeDegrees(coords.heading) : null
@@ -147,6 +178,10 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
     setPosition(nextPosition)
     setLocationError('')
     setLocationState(nextPosition.accuracy <= GPS_LOCK_ACCURACY_METERS ? 'live' : 'weak')
+    const arrivalReading = nextPosition.accuracy <= ARRIVAL_ACCURACY_METERS
+      && distanceInMeters(nextPosition, destination.coordinate) <= ARRIVAL_DISTANCE_METERS
+    arrivalFixesRef.current = arrivalReading ? Math.min(ARRIVAL_FIX_COUNT, arrivalFixesRef.current + 1) : 0
+    setArrivalFixes(arrivalFixesRef.current)
     const speed = typeof coords.speed === 'number' && Number.isFinite(coords.speed) ? coords.speed : null
     if (course !== null && (speed === null || speed > 0.25)) {
       saveHeading(course, 'course')
@@ -157,12 +192,14 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
       const movementThreshold = Math.max(2, Math.min(8, Math.max(previousPosition.accuracy, nextPosition.accuracy) * 0.25))
       if (movement >= movementThreshold) saveHeading(bearingBetween(previousPosition, nextPosition), 'course')
     }
-  }, [saveHeading])
+  }, [destination.coordinate, saveHeading])
 
   const reportLocationError = useCallback((error: GeolocationPositionError) => {
     if (error.code === error.PERMISSION_DENIED) {
       latestPositionRef.current = null
+      arrivalFixesRef.current = 0
       setPosition(null)
+      setArrivalFixes(0)
       setLocationState('denied')
       setLocationError('Location access was denied. Allow precise location and start navigation again.')
       return
@@ -253,7 +290,7 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
     }
     if (typeof OrientationEvent.requestPermission === 'function') {
       try {
-        const permission = await OrientationEvent.requestPermission()
+        const permission = await OrientationEvent.requestPermission(true)
         if (navigationSessionRef.current !== session) return
         if (permission !== 'granted') {
           setCompassState('denied')
@@ -270,16 +307,9 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
       if (navigationSessionRef.current !== session) return
       const nextHeading = headingFromEvent(event)
       if (nextHeading === null) return
-      const updatedAt = Date.now()
-      const absoluteReading = isAbsoluteHeadingEvent(event)
-      // Some Android browsers emit absolute and relative events together.
-      // Prefer the true-north stream, but use relative readings when it is the
-      // only live sensor source available.
-      if (!absoluteReading && updatedAt - lastAbsoluteHeadingAtRef.current < COMPASS_STALE_AFTER_MS) return
-      if (absoluteReading) lastAbsoluteHeadingAtRef.current = updatedAt
-      clearCompassTimeout()
       saveHeading(nextHeading, 'compass')
       setCompassState('active')
+      armCompassFreshnessWatchdog()
     }
     orientationListenerRef.current = listener
     window.addEventListener('deviceorientationabsolute', listener)
@@ -292,17 +322,20 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
     compassTimeoutRef.current = window.setTimeout(() => {
       if (headingRef.current?.source !== 'compass') setCompassState('unavailable')
     }, 8_000)
-  }, [clearCompassTimeout, saveHeading, stopCompassTracking])
+  }, [armCompassFreshnessWatchdog, saveHeading, stopCompassTracking])
 
   const startNavigation = () => {
     stopSensors()
     const session = navigationSessionRef.current + 1
     navigationSessionRef.current = session
     headingRef.current = null
+    latestCourseHeadingRef.current = null
     latestPositionRef.current = null
-    lastAbsoluteHeadingAtRef.current = 0
+    displayRotationRef.current = null
+    arrivalFixesRef.current = 0
     setHeading(null)
     setPosition(null)
+    setArrivalFixes(0)
     setLocationError('')
     setCameraError(!window.isSecureContext ? 'Camera access requires HTTPS (or localhost).' : !navigator.mediaDevices?.getUserMedia ? 'This browser does not support camera access.' : '')
     setCompassState('acquiring')
@@ -335,6 +368,7 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
         return
       }
       stream = nextStream
+      setCameraError('')
       if (video) {
         video.srcObject = nextStream
         void video.play().catch(() => undefined)
@@ -348,42 +382,99 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
       stream?.getTracks().forEach(track => track.stop())
       if (video) video.srcObject = null
     }
-  }, [camera])
+  }, [camera, cameraAttempt])
 
-  const turn = guidance && heading ? relativeBearing(guidance.bearing, heading.degrees) : null
+  const turn = guidance && heading ? signedRelativeBearing(guidance.bearing, heading.degrees) : null
+  useLayoutEffect(() => {
+    if (turn === null) {
+      displayRotationRef.current = null
+      return
+    }
+    const nextRotation = unwrapDegrees(displayRotationRef.current, turn)
+    displayRotationRef.current = nextRotation
+    if (arrowIconRef.current) arrowIconRef.current.style.transform = `rotate(${nextRotation}deg)`
+  }, [turn])
+
+  const arrived = arrivalFixes >= ARRIVAL_FIX_COUNT
+  const nearby = !arrived && (guidance?.distanceMeters ?? Number.POSITIVE_INFINITY) <= NEARBY_DISTANCE_METERS
+  const aligned = turn !== null && Math.abs(turn) <= ALIGNED_THRESHOLD_DEGREES
+  const precisionState = arrived ? 'arrived' : aligned ? 'aligned' : turn !== null ? 'active' : 'searching'
   const locationLabel = locationState === 'live' ? 'GPS LOCKED' : locationState === 'weak' ? `GPS ±${Math.round(position?.accuracy ?? 0)} M` : locationState === 'acquiring' ? 'ACQUIRING GPS' : locationState === 'denied' ? 'LOCATION DENIED' : locationState === 'unavailable' ? 'GPS UNAVAILABLE' : locationState === 'error' ? 'GPS RETRY NEEDED' : 'GPS IDLE'
   const compassLabel = heading?.source === 'compass' ? 'phone compass' : heading?.source === 'course' ? 'walking direction' : compassState === 'denied' ? 'compass denied' : compassState === 'unavailable' ? 'compass unavailable' : 'calibrating compass'
   const serviceErrors = [locationError, cameraError].filter(Boolean).join(' ')
-  const routeMessage = serviceErrors || (!guidance ? 'Getting a fresh GPS position. Keep precise location enabled.' : !heading ? compassState === 'denied' ? 'Compass access was denied. Enable Motion & Orientation access, then start again.' : compassState === 'unavailable' ? 'Compass is unavailable. Start walking to use your travel direction instead.' : 'Calibrating your compass. Hold the phone upright and move it in a figure eight.' : `${guidance.instruction}. Keep the arrow centered as you walk.`)
+  const precisionMessage = serviceErrors || (arrived
+    ? `You have reached ${destination.label}.`
+    : !guidance
+      ? 'Getting a fresh GPS position. Keep precise location enabled.'
+      : !heading
+        ? compassState === 'denied'
+          ? 'Compass access was denied. Allow Motion & Orientation access, then try again.'
+          : compassState === 'unavailable'
+            ? 'Direction is unavailable. Start walking to use your travel direction, or retry the compass.'
+            : 'Calibrating direction. Hold the phone upright and move it in a figure eight.'
+        : aligned
+          ? `Continue toward ${destination.label}.`
+          : `${guidance.instruction}. Follow the arrow as you walk.`)
+  const turnLabel = turn === null
+    ? 'Calibrating direction'
+    : Math.abs(turn) <= ALIGNED_THRESHOLD_DEGREES
+      ? 'Straight ahead'
+      : `Turn ${Math.round(Math.abs(turn))}° ${turn < 0 ? 'left' : 'right'}`
+  const needsRetry = locationState === 'denied' || locationState === 'unavailable' || locationState === 'error'
+    || compassState === 'denied' || compassState === 'unavailable' || Boolean(cameraError)
+
+  const retryServices = () => {
+    const session = navigationSessionRef.current
+    setLocationError('')
+    setCompassState('acquiring')
+    setCameraError(!window.isSecureContext ? 'Camera access requires HTTPS (or localhost).' : !navigator.mediaDevices?.getUserMedia ? 'This browser does not support camera access.' : '')
+    startLocationTracking(session)
+    void requestCompass(session)
+    setCameraAttempt(attempt => attempt + 1)
+  }
 
   if (camera) {
     return (
-      <div className="camera-route apple-navigation">
+      <div className={`camera-route apple-navigation is-${precisionState} ${cameraError ? 'camera-unavailable' : ''}`}>
         <video ref={videoRef} autoPlay playsInline muted />
         <div className="camera-tint" />
-        <header className="apple-navigation-header">
-          <button className="apple-nav-end" aria-label="Exit navigation" onClick={exitNavigation}><X size={16} />End</button>
-          <div className="apple-nav-status"><i className="live" />{locationLabel}</div>
+        <header className="precision-header">
+          <div className="precision-destination"><small>Finding</small><b>{destination.label}</b></div>
+          <button className="precision-close" aria-label="Exit navigation" onClick={exitNavigation}><X size={20} /></button>
         </header>
-        {turn !== null && <div className="route-arrow" aria-label={`Turn ${Math.round(turn)} degrees`}>
-          <span className="route-arrow-ring" style={{ transform: `rotate(${turn}deg)` }}><ArrowUp size={32} strokeWidth={2.8} /></span>
-          <span className="route-arrow-label">{turn.toFixed(1)}°</span>
-        </div>}
-        <section className="camera-overlay apple-route-card" aria-live="polite">
-          <div className="apple-route-instruction">
-            <span className="apple-maneuver"><ArrowUp size={25} strokeWidth={2.8} /></span>
-            <div><b>{guidance?.instruction ?? 'Finding your route'}</b><span>{routeMessage}</span></div>
-            <strong>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</strong>
+        <main className="precision-stage" aria-live="polite">
+          {arrived ? (
+            <div className="precision-arrival" aria-label="Destination reached"><Check size={82} strokeWidth={2.5} /></div>
+          ) : turn !== null ? (
+            <div className="precision-arrow" aria-label={turnLabel}>
+              <span className="precision-arrow-halo" />
+              <ArrowUp ref={arrowIconRef} size={112} strokeWidth={2.6} />
+            </div>
+          ) : (
+            <div className="precision-search" aria-label="Calibrating direction">
+              <i /><i /><span><LocateFixed size={42} /></span>
+            </div>
+          )}
+          <div className="precision-distance">
+            <strong>{arrived ? 'Here' : guidance ? formatDistance(guidance.distanceMeters) : '—'}</strong>
+            <span>{arrived ? 'Destination reached' : nearby ? 'Nearby' : turnLabel}</span>
           </div>
-          <div className="apple-route-meta">
-            <span>to {destination.label}</span>
-            <div><span>{turn === null ? 'Calibrating' : `${turn.toFixed(1)}°`}</span><small>{compassLabel}</small></div>
+        </main>
+        <footer className="precision-footer">
+          <div className="precision-status-row">
+            <span className={`precision-status ${locationState === 'denied' || locationState === 'unavailable' || locationState === 'error' ? 'has-error' : ''}`}><i />{locationLabel}</span>
+            <span className={`precision-status ${compassState === 'denied' || compassState === 'unavailable' ? 'has-error' : ''}`}><Compass size={13} />{compassLabel}</span>
           </div>
-          <div className="apple-route-footer">
-            <span><b>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</b> remaining</span>
-            <button onClick={exitNavigation}>End route</button>
+          <p>{precisionMessage}</p>
+          <div className="precision-meta">
+            <span>{position ? `Accuracy ±${Math.round(position.accuracy)} m` : 'Waiting for position'}</span>
+            <span>{guidance?.mode === 'route' ? 'Walking route' : 'Direct guidance'}</span>
           </div>
-        </section>
+          <div className="precision-actions">
+            {needsRetry && <button className="precision-retry" onClick={retryServices}><RefreshCw size={15} />Try again</button>}
+            <button className="precision-end" onClick={exitNavigation}>End</button>
+          </div>
+        </footer>
       </div>
     )
   }
@@ -393,20 +484,14 @@ function Guide({ destination, camera, setCamera }: { destination: NavigationDest
 
 function headingFromEvent(event: DeviceOrientationEvent) {
   const webkitEvent = event as DeviceOrientationEvent & { webkitCompassHeading?: number; webkitCompassAccuracy?: number }
-  if (typeof webkitEvent.webkitCompassHeading === 'number' && Number.isFinite(webkitEvent.webkitCompassHeading) && (webkitEvent.webkitCompassAccuracy === undefined || webkitEvent.webkitCompassAccuracy >= 0)) return normalizeDegrees(webkitEvent.webkitCompassHeading)
-  // Chrome commonly sends `deviceorientation` with alpha but without an
-  // `absolute` flag. Rejecting it means the on-screen arrow never updates.
-  if (typeof event.alpha !== 'number' || !Number.isFinite(event.alpha)) return null
   const legacyScreenAngle = (window as Window & { orientation?: number }).orientation
   const screenAngle = window.screen.orientation?.angle ?? (typeof legacyScreenAngle === 'number' ? legacyScreenAngle : 0)
-  return normalizeDegrees(360 - event.alpha + screenAngle)
-}
-function isAbsoluteHeadingEvent(event: DeviceOrientationEvent) {
-  const webkitEvent = event as DeviceOrientationEvent & { webkitCompassHeading?: number; webkitCompassAccuracy?: number }
   const hasWebkitCompass = typeof webkitEvent.webkitCompassHeading === 'number'
     && Number.isFinite(webkitEvent.webkitCompassHeading)
     && (webkitEvent.webkitCompassAccuracy === undefined || webkitEvent.webkitCompassAccuracy >= 0)
-  return hasWebkitCompass || event.type === 'deviceorientationabsolute' || event.absolute === true
+  if (hasWebkitCompass) return normalizeDegrees(webkitEvent.webkitCompassHeading! + screenAngle)
+  if (event.type !== 'deviceorientationabsolute' && event.absolute !== true) return null
+  return compassHeadingFromOrientation(event.alpha, event.beta, event.gamma, screenAngle)
 }
 function Assistant() { const prompts = ['Where is my next class?', 'What should I do now?', 'I have 40 minutes before class.', 'Take me to Student Parking.']; const [message, setMessage] = useState(''); return <div className="view"><div className="assistant-heading"><span className="assistant-orb"><Bot size={26} /></span><div><div className="eyebrow"><i />CampusMate intelligence</div><h1>Ask your <em>companion.</em></h1><p>The n8n AI agent will live here next.</p></div><b className="coming">COMING SOON</b></div><div className="panel chat"><div className="chat-intro"><Sparkles size={18} /><h2>Ready when you are.</h2><p>Connect a future AI Agent webhook to make this space conversational.</p></div><div className="prompts">{prompts.map(prompt => <button key={prompt} onClick={() => setMessage(prompt)}>{prompt}<ArrowRight size={14} /></button>)}</div><div className="composer"><input value={message} onChange={e => setMessage(e.target.value)} placeholder="Ask CampusMate anything..." /><button disabled={!message}><Send size={16} /></button></div><small className="disclaimer"><CircleAlert size={13} />No AI agent is connected in this preview. Your message will not be sent.</small></div></div> }
 function Modal({ meeting, close }: { meeting: Meeting; close: () => void }) { return <div className="backdrop" onClick={close}><section className="panel modal" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={close}><X size={16} /></button><b className={`course-tag ${color(meeting.course)}`}>{meeting.course}</b><h2>{meeting.title}</h2><p>Section {meeting.section} · {meeting.status}</p><div className="modal-details"><span><CalendarDays size={15} />{meeting.day}, {timeLabel(meeting.start)} – {timeLabel(meeting.end)}</span><span><MapPin size={15} />{meeting.room || 'Room to be announced'}</span></div><button className="primary full"><Navigation size={15} />Guide me here</button></section></div> }

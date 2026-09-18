@@ -55,7 +55,10 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 function openCameraRoute() {
   render(<CampusMateApp />)
@@ -78,21 +81,35 @@ function sendPosition(overrides: Partial<Omit<GeolocationCoordinates, 'toJSON'>>
   act(() => watchSuccess?.({ coords: coordinates, timestamp: Date.now() } as GeolocationPosition))
 }
 
+function sendOrientation(
+  type: 'deviceorientation' | 'deviceorientationabsolute',
+  values: { alpha?: number; beta?: number; gamma?: number; absolute?: boolean; webkitCompassHeading?: number; webkitCompassAccuracy?: number } = {},
+) {
+  const orientation = new Event(type)
+  Object.defineProperties(orientation, {
+    alpha: { value: values.alpha ?? 0 },
+    beta: { value: values.beta ?? 90 },
+    gamma: { value: values.gamma ?? 0 },
+    absolute: { value: values.absolute ?? type === 'deviceorientationabsolute' },
+    ...(values.webkitCompassHeading === undefined ? {} : { webkitCompassHeading: { value: values.webkitCompassHeading } }),
+    ...(values.webkitCompassAccuracy === undefined ? {} : { webkitCompassAccuracy: { value: values.webkitCompassAccuracy } }),
+  })
+  act(() => window.dispatchEvent(orientation))
+}
+
 describe('live camera navigation', () => {
   it('uses fresh GPS and an approved compass event to render a live, screen-relative arrow', async () => {
     openCameraRoute()
-    await waitFor(() => expect(requestMotionPermission).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(requestMotionPermission).toHaveBeenCalledWith(true))
     await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1))
-    expect(screen.getAllByText('—')).toHaveLength(2)
+    expect(screen.getByText('—')).toBeTruthy()
 
     sendPosition()
-    const orientation = new Event('deviceorientationabsolute')
-    Object.defineProperties(orientation, { absolute: { value: true }, alpha: { value: 0 } })
-    act(() => window.dispatchEvent(orientation))
+    sendOrientation('deviceorientationabsolute')
 
     expect(await screen.findByText('phone compass')).toBeTruthy()
     expect(screen.queryByText('—')).toBeNull()
-    expect(screen.getByText(/to Student Parking · Point B/)).toBeTruthy()
+    expect(screen.getByText(/Follow the arrow/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Exit navigation' }))
     expect(clearWatch).toHaveBeenCalledWith(73)
@@ -105,7 +122,7 @@ describe('live camera navigation', () => {
     act(() => watchError?.({ code: 1, PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2 } as GeolocationPositionError))
 
     expect(await screen.findByText(/Location access was denied/)).toBeTruthy()
-    expect(screen.getAllByText('—')).toHaveLength(2)
+    expect(screen.getByText('—')).toBeTruthy()
     expect(screen.queryByText(/Point A/)).toBeNull()
   })
 
@@ -120,32 +137,70 @@ describe('live camera navigation', () => {
   it('recomputes remaining distance from every live location fix', () => {
     openCameraRoute()
     sendPosition()
-    const initialDistance = document.querySelector('.apple-route-instruction > strong')?.textContent
+    const initialDistance = document.querySelector('.precision-distance > strong')?.textContent
 
     sendPosition({ longitude: 35.48279627287705 })
-    const updatedDistance = document.querySelector('.apple-route-instruction > strong')?.textContent
+    const updatedDistance = document.querySelector('.precision-distance > strong')?.textContent
 
     expect(initialDistance).toBeTruthy()
     expect(updatedDistance).toBe('0.0 m')
     expect(updatedDistance).not.toBe(initialDistance)
   })
 
-  it('updates from regular deviceorientation events that do not expose the absolute flag', async () => {
+  it('rejects unanchored relative orientation but accepts the iOS WebKit compass heading', async () => {
     openCameraRoute()
-    await waitFor(() => expect(requestMotionPermission).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(requestMotionPermission).toHaveBeenCalledWith(true))
     sendPosition()
 
-    const firstOrientation = new Event('deviceorientation')
-    Object.defineProperty(firstOrientation, 'alpha', { value: 0 })
-    act(() => window.dispatchEvent(firstOrientation))
+    sendOrientation('deviceorientation', { alpha: 0, absolute: false })
+    expect(screen.queryByText('phone compass')).toBeNull()
+    expect(screen.getByLabelText('Calibrating direction')).toBeTruthy()
 
+    sendOrientation('deviceorientation', { absolute: false, webkitCompassHeading: 0, webkitCompassAccuracy: 5 })
     expect(await screen.findByText('phone compass')).toBeTruthy()
-    expect(screen.getByLabelText(/Turn 90 degrees/)).toBeTruthy()
+    expect(screen.getByLabelText(/Turn 90° right/)).toBeTruthy()
 
-    const nextOrientation = new Event('deviceorientation')
-    Object.defineProperty(nextOrientation, 'alpha', { value: 90 })
-    act(() => window.dispatchEvent(nextOrientation))
+    sendOrientation('deviceorientation', { absolute: false, webkitCompassHeading: 90, webkitCompassAccuracy: 5 })
+    expect(screen.getByLabelText(/^Turn/).getAttribute('aria-label')).not.toBe('Turn 90° right')
+  })
 
-    expect(screen.getByLabelText(/^Turn/).getAttribute('aria-label')).not.toBe('Turn 90 degrees')
+  it('falls back to a fresh walking direction when compass updates stop', async () => {
+    vi.useFakeTimers()
+    openCameraRoute()
+    await act(async () => { await Promise.resolve() })
+    sendPosition({ heading: 90, speed: 1 })
+    sendOrientation('deviceorientation', { webkitCompassHeading: 0, webkitCompassAccuracy: 5 })
+
+    expect(screen.getByText('phone compass')).toBeTruthy()
+    act(() => vi.advanceTimersByTime(1_501))
+
+    expect(screen.getByText('walking direction')).toBeTruthy()
+  })
+
+  it('turns green when aligned and confirms arrival only after three accurate fixes', async () => {
+    openCameraRoute()
+    await waitFor(() => expect(requestMotionPermission).toHaveBeenCalledWith(true))
+    sendPosition()
+    sendOrientation('deviceorientationabsolute', { alpha: 270, beta: 90, gamma: 0, absolute: true })
+
+    expect(document.querySelector('.apple-navigation')?.classList.contains('is-aligned')).toBe(true)
+
+    sendPosition({ longitude: 35.48279627287705, accuracy: 5 })
+    sendPosition({ longitude: 35.48279627287705, accuracy: 5 })
+    expect(screen.queryByLabelText('Destination reached')).toBeNull()
+    sendPosition({ longitude: 35.48279627287705, accuracy: 5 })
+
+    expect(screen.getByLabelText('Destination reached')).toBeTruthy()
+    expect(document.querySelector('.apple-navigation')?.classList.contains('is-arrived')).toBe(true)
+  })
+
+  it('keeps guidance visible on the gradient fallback when the camera fails', async () => {
+    getUserMedia.mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'))
+    openCameraRoute()
+
+    await waitFor(() => expect(screen.getByText(/Camera permission was denied/)).toBeTruthy())
+    expect(document.querySelector('.apple-navigation')?.classList.contains('camera-unavailable')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy()
+    expect(screen.getByLabelText('Calibrating direction')).toBeTruthy()
   })
 })

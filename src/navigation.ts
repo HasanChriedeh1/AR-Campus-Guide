@@ -77,6 +77,56 @@ export function relativeBearing(targetBearing: number, deviceHeading: number) {
   return normalizeDegrees(targetBearing - deviceHeading)
 }
 
+/** Return the shortest signed turn from the device heading to the target. */
+export function signedRelativeBearing(targetBearing: number, deviceHeading: number) {
+  const turn = normalizeDegrees(targetBearing - deviceHeading + 180) - 180
+  return Object.is(turn, -0) ? 0 : turn
+}
+
+/** Keep a normalized angle on a continuous axis so CSS never spins the long way. */
+export function unwrapDegrees(previous: number | null, next: number) {
+  const normalizedNext = normalizeDegrees(next)
+  if (previous === null) return normalizedNext
+  const previousNormalized = normalizeDegrees(previous)
+  const shortestArc = normalizeDegrees(normalizedNext - previousNormalized + 180) - 180
+  return previous + shortestArc
+}
+
+/**
+ * Calculate the direction faced by the rear camera from an absolute
+ * DeviceOrientation reading. This is the tilt-compensated algorithm described
+ * by the Device Orientation specification for augmented-reality interfaces.
+ */
+export function compassHeadingFromOrientation(
+  alpha: number | null,
+  beta: number | null,
+  gamma: number | null,
+  screenAngle = 0,
+) {
+  if (alpha === null || beta === null || gamma === null) return null
+  if (![alpha, beta, gamma, screenAngle].every(Number.isFinite)) return null
+
+  // When the device is flat, the camera vector has no horizontal component;
+  // use the conventional top-of-device heading instead.
+  if (Math.abs(beta) < 0.0001 && Math.abs(gamma) < 0.0001) {
+    return normalizeDegrees(360 - alpha + screenAngle)
+  }
+
+  const degreesToRadians = Math.PI / 180
+  const x = beta * degreesToRadians
+  const y = gamma * degreesToRadians
+  const z = alpha * degreesToRadians
+  const cY = Math.cos(y)
+  const cZ = Math.cos(z)
+  const sX = Math.sin(x)
+  const sY = Math.sin(y)
+  const sZ = Math.sin(z)
+  const vectorX = -cZ * sY - sZ * sX * cY
+  const vectorY = -sZ * sY + cZ * sX * cY
+
+  return normalizeDegrees(Math.atan2(vectorX, vectorY) / degreesToRadians + screenAngle)
+}
+
 /** Smooth an angle along its shortest circular arc. */
 export function smoothHeading(previous: number | null, next: number, amount = 0.28) {
   if (previous === null) return normalizeDegrees(next)

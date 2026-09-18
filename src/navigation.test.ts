@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bearingBetween, distanceInMeters, getNavigationGuidance, relativeBearing, smoothHeading } from './navigation'
+import { bearingBetween, compassHeadingFromOrientation, distanceInMeters, getNavigationGuidance, relativeBearing, signedRelativeBearing, smoothHeading, unwrapDegrees } from './navigation'
 import type { CampusWalkingRoute, NavigationDestination } from './navigation'
 
 const destination: NavigationDestination = {
@@ -25,7 +25,20 @@ describe('navigation calculations', () => {
   it('wraps relative bearings and smooths across north instead of spinning around the dial', () => {
     expect(relativeBearing(10, 350)).toBe(20)
     expect(relativeBearing(350, 10)).toBe(340)
+    expect(signedRelativeBearing(10, 350)).toBe(20)
+    expect(signedRelativeBearing(350, 10)).toBe(-20)
     expect(smoothHeading(350, 10, 0.5)).toBe(0)
+    expect(unwrapDegrees(359, 1)).toBe(361)
+    expect(unwrapDegrees(361, 359)).toBe(359)
+  })
+
+  it('calculates a tilt-compensated camera heading and corrects screen rotation', () => {
+    expect(compassHeadingFromOrientation(0, 90, 0)).toBeCloseTo(0)
+    expect(compassHeadingFromOrientation(90, 90, 0)).toBeCloseTo(270)
+    expect(compassHeadingFromOrientation(270, 45, 0)).toBeCloseTo(90)
+    expect(compassHeadingFromOrientation(0, 90, 0, 90)).toBeCloseTo(90)
+    expect(compassHeadingFromOrientation(45, 0, 0)).toBeCloseTo(315)
+    expect(compassHeadingFromOrientation(null, 90, 0)).toBeNull()
   })
 
   it('accepts future walking-route guidance without changing the camera interface', () => {
