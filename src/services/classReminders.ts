@@ -105,7 +105,7 @@ export function showBrowserClassReminder(reminder: ClassReminder) {
   try {
     new Notification(`${reminder.meeting.code} starts in ${reminder.minutesUntilStart} minutes`, {
       body: `${reminder.meeting.title}${room}`,
-      icon: '/logo.png',
+      icon: '/images/brand/rhu-logo.webp',
       tag: `rhu-class-${reminder.id}`,
     })
   } catch {

@@ -232,7 +232,7 @@ export default function RhuStudentApp() {
       <header className="rhu-header">
         <div className="rhu-header-inner">
           <button className="rhu-brand" type="button" onClick={() => setView('home')} aria-label="RHU Student Companion home">
-            <img src="/logo.png" alt="Rafik Hariri University" />
+            <img src="/images/brand/rhu-logo.webp" alt="Rafik Hariri University" width="447" height="447" decoding="async" />
           </button>
           <nav className="rhu-desktop-tabs" aria-label="Primary navigation">
             {navigationItems.map(({ id, label, icon: Icon }) => (
@@ -311,7 +311,7 @@ function SignIn({ onAuthenticate }: { onAuthenticate: (username: string, passwor
   return (
     <main className="sign-in-page">
       <section className="sign-in-brand" aria-label="Rafik Hariri University Student Companion">
-        <img src="/logo.png" alt="Rafik Hariri University" />
+        <img src="/images/brand/rhu-logo.webp" alt="Rafik Hariri University" width="447" height="447" decoding="async" fetchPriority="high" />
         <span className="sign-in-badge"><Sparkles size={15} />Student Companion</span>
         <h1>Your campus,<br />made simpler.</h1>
         <p>Classes, campus directions, cafeteria choices, and help in one calm space.</p>
@@ -322,7 +322,7 @@ function SignIn({ onAuthenticate }: { onAuthenticate: (username: string, passwor
         </div>
       </section>
       <section className="sign-in-panel">
-        <div className="sign-in-mobile-logo"><img src="/logo.png" alt="Rafik Hariri University" /></div>
+        <div className="sign-in-mobile-logo"><img src="/images/brand/rhu-logo.webp" alt="Rafik Hariri University" width="447" height="447" decoding="async" fetchPriority="high" /></div>
         <span className="rhu-kicker">Welcome back</span>
         <h2>Sign in to continue</h2>
         <p>Use your RHU student credentials to securely retrieve your schedule.</p>
@@ -390,7 +390,7 @@ function NavigationView({ selected, select, camera, setCamera }: { selected: typ
       <div className="destination-grid">
         {CAMPUS_DESTINATIONS.map(item => (
           <button key={item.id} className={selected?.id === item.id ? 'selected' : ''} aria-pressed={selected?.id === item.id} onClick={() => select(item)}>
-            <span className="destination-photo"><img src={item.imageSrc} alt={item.imageAlt} /></span>
+            <span className="destination-photo"><img src={item.imageSrc} srcSet={item.imageSrcSet} sizes="(max-width: 960px) 50vw, 200px" width={item.imageWidth} height={item.imageHeight} loading="lazy" decoding="async" alt={item.imageAlt} /></span>
             <span className="destination-copy"><strong>{item.label}</strong><small>{item.description}</small></span>
             <span className="destination-choice" aria-hidden="true">{selected?.id === item.id ? <CheckCircle2 size={20} /> : <ArrowRight size={18} />}</span>
           </button>

@@ -14,7 +14,7 @@ const STUDENT_PARKING: NavigationDestination = {
   id: 'student-parking',
   label: 'Student Parking · Point B',
   description: 'Legacy camera navigation test destination',
-  imageSrc: '/logo.png',
+  imageSrc: '/images/brand/rhu-logo.webp',
   imageAlt: 'Rafik Hariri University logo',
   isDemoCoordinate: true,
   coordinate: { lat: 33.71314599891659, lng: 35.48279627287705 },
@@ -686,7 +686,7 @@ export function Guide({ destination: defaultDestination, camera, setCamera, pres
       <div className="rhu-modal-backdrop guide-modal-backdrop" onClick={onClose}>
         <section className="rhu-modal guide-destination-modal" role="dialog" aria-modal="true" aria-labelledby="guide-destination-title" onClick={event => event.stopPropagation()}>
           <button className="modal-close-rhu guide-modal-close" type="button" aria-label="Close destination details" onClick={onClose}><X size={17} /></button>
-          <div className="guide-modal-photo"><img src={destination.imageSrc} alt={destination.imageAlt} /></div>
+          <div className="guide-modal-photo"><img src={destination.imageSrc} srcSet={destination.imageSrcSet} sizes="(max-width: 462px) calc(100vw - 32px), 430px" width={destination.imageWidth} height={destination.imageHeight} decoding="async" alt={destination.imageAlt} /></div>
           <div className="guide-modal-body">
             <span className="rhu-kicker">Your destination</span>
             <h2 id="guide-destination-title">{destination.label}</h2>

@@ -8,6 +8,9 @@ export type NavigationDestination = {
   label: string
   description: string
   imageSrc: string
+  imageSrcSet?: string
+  imageWidth?: number
+  imageHeight?: number
   imageAlt: string
   isDemoCoordinate: boolean
   coordinate: GeoCoordinate
