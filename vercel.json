@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/schedule",
-      "destination": "https://hasanchriedeh.app.n8n.cloud/webhook-test/50b9be8b-c068-437d-82d9-ba5718007736"
+      "destination": "https://hasanchriedeh.app.n8n.cloud/webhook/50b9be8b-c068-437d-82d9-ba5718007736"
     },
     {
       "source": "/api/chat",
