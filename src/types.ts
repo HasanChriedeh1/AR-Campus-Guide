@@ -23,6 +23,7 @@ export type WebhookMeeting = {
 export type ScheduleWebhookResponse = {
   courses: WebhookCourse[]
   meetings: WebhookMeeting[]
+  reminderMinutesBefore?: number
 }
 
 export type Course = {
@@ -52,6 +53,7 @@ export type ScheduleMeeting = {
 export type ScheduleData = {
   courses: Course[]
   meetings: ScheduleMeeting[]
+  reminderMinutesBefore: number
 }
 
 export type StudentSession = {

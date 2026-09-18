@@ -1,32 +1,28 @@
-# React + TypeScript + Vite
+# RHU Student Companion
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A React + TypeScript web app that retrieves a student's verified RHU timetable through n8n and presents classes, campus navigation, cafeteria information, and a campus assistant.
 
-Currently, two official plugins are available:
+## Class reminders
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- The n8n schedule response may include `reminderMinutesBefore` (default: `10`).
+- While the web app is open, it checks the verified timetable every 15 seconds and shows one reminder during the configured pre-class window.
+- Delivered occurrence IDs are retained locally to prevent duplicate alerts. Moodle credentials and tokens are never stored for reminders.
 
-## React Compiler
+The in-app reminder works without a browser permission prompt. If the site already has notification permission, the same reminder is also delivered as a system notification.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Development
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Quality checks:
+
+```bash
+npm test
+npm run lint
+npm run build
+```
+
+Copy `.env.example` to `.env` and point `VITE_SCHEDULE_API_URL` at the same-origin schedule route. Vercel rewrites that route to the n8n webhook in `vercel.json`.

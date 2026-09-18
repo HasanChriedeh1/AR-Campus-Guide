@@ -125,13 +125,13 @@ describe('live camera navigation', () => {
     openCameraRoute()
     await waitFor(() => expect(requestMotionPermission).toHaveBeenCalledWith(true))
     await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1))
-    expect(screen.getByText('—')).toBeTruthy()
+    expect(screen.getByText('Unavailable')).toBeTruthy()
 
     sendPosition()
     sendOrientation('deviceorientationabsolute')
 
     expect(await screen.findByText('phone compass')).toBeTruthy()
-    expect(screen.queryByText('—')).toBeNull()
+    expect(screen.queryByText('Unavailable')).toBeNull()
     expect(screen.getByText(/Follow the arrow/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Exit navigation' }))
@@ -145,7 +145,7 @@ describe('live camera navigation', () => {
     act(() => watchError?.({ code: 1, PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2 } as GeolocationPositionError))
 
     expect(await screen.findByText(/Location access was denied/)).toBeTruthy()
-    expect(screen.getByText('—')).toBeTruthy()
+    expect(screen.getByText('Unavailable')).toBeTruthy()
     expect(screen.queryByText(/Point A/)).toBeNull()
   })
 
@@ -154,7 +154,7 @@ describe('live camera navigation', () => {
     sendPosition({ heading: 90, speed: 1 })
 
     expect(await screen.findByText('walking direction')).toBeTruthy()
-    expect(screen.queryByText('—')).toBeNull()
+    expect(screen.queryByText('Unavailable')).toBeNull()
   })
 
   it('recomputes remaining distance from every live location fix', () => {

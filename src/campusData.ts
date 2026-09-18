@@ -1,13 +1,12 @@
 import type { NavigationDestination } from './navigation'
 
-export const DEMO_COORDINATE = { lat: 33.71314599891659, lng: 35.48279627287705 } as const
-
 export const CAMPUS_DESTINATIONS = [
-  { id: 'finance', label: 'Finance', description: 'Student accounts, tuition, and payments', imageSrc: '/finance.png', imageAlt: 'Entrance to the RHU Finance office', isDemoCoordinate: true, coordinate: DEMO_COORDINATE },
-  { id: 'cafeteria', label: 'Cafeteria', description: 'Food, drinks, and student seating', imageSrc: '/Cafeteria.png', imageAlt: 'RHU cafeteria building and Campus Bites sign', isDemoCoordinate: true, coordinate: DEMO_COORDINATE },
-  { id: 'block-c', label: 'Block C', description: 'Classrooms and computer labs', imageSrc: '/blockC.png', imageAlt: 'Exterior view of RHU Block C', isDemoCoordinate: true, coordinate: DEMO_COORDINATE },
-  { id: 'library', label: 'Library', description: 'Study, research, and quiet spaces', imageSrc: '/Library.png', imageAlt: 'Arched entrance to the RHU Library', isDemoCoordinate: true, coordinate: DEMO_COORDINATE },
-  { id: 'admissions', label: 'Admissions', description: 'Applications and prospective student support', imageSrc: '/admissions.png', imageAlt: 'Entrance and sign for the RHU Admissions Office', isDemoCoordinate: true, coordinate: DEMO_COORDINATE },
+  { id: 'finance', label: 'Finance', description: 'Student accounts, tuition, and payments', imageSrc: '/finance.png', imageAlt: 'Entrance to the RHU Finance office', isDemoCoordinate: false, coordinate: { lat: 33.71375, lng: 35.48433333333333 } },
+  { id: 'cafeteria', label: 'Cafeteria', description: 'Food, drinks, and student seating', imageSrc: '/Cafeteria.png', imageAlt: 'RHU cafeteria building and Campus Bites sign', isDemoCoordinate: false, coordinate: { lat: 33.71349606857637, lng: 35.48392689194502 } },
+  { id: 'block-c', label: 'Block C', description: 'Classrooms and computer labs', imageSrc: '/blockC.png', imageAlt: 'Exterior view of RHU Block C', isDemoCoordinate: false, coordinate: { lat: 33.71447222222222, lng: 35.48391666666667 } },
+  { id: 'library', label: 'Library', description: 'Study, research, and quiet spaces', imageSrc: '/Library.png', imageAlt: 'Arched entrance to the RHU Library', isDemoCoordinate: false, coordinate: { lat: 33.71377777777778, lng: 35.48425 } },
+  { id: 'admissions', label: 'Admissions', description: 'Applications and prospective student support', imageSrc: '/admissions.png', imageAlt: 'Entrance and sign for the RHU Admissions Office', isDemoCoordinate: false, coordinate: { lat: 33.71322673114103, lng: 35.48393880973027 } },
+  { id: 'student-affairs', label: "Student's Affairs", description: 'Student services, support, and campus life', imageSrc: '/studentaffairs.png', imageAlt: 'Entrance to the RHU Student Affairs office', isDemoCoordinate: false, coordinate: { lat: 33.71325, lng: 35.48386111111111 } },
 ] satisfies NavigationDestination[]
 
 export type MenuCategory = 'Breakfast' | 'Mains' | 'Snacks' | 'Drinks'

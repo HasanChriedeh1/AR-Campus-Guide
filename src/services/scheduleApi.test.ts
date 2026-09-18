@@ -41,6 +41,12 @@ describe('schedule webhook normalization', () => {
     ])
   })
 
+  it('uses the workflow reminder lead time and defaults older responses to ten minutes', () => {
+    expect(normalizeSchedule(payload).reminderMinutesBefore).toBe(10)
+    expect(normalizeSchedule({ ...payload, reminderMinutesBefore: 15 }).reminderMinutesBefore).toBe(15)
+    expect(() => normalizeSchedule({ ...payload, reminderMinutesBefore: 0 })).toThrow(/unexpected response/)
+  })
+
   it('rejects malformed meetings rather than authenticating with bad data', () => {
     expect(() => normalizeSchedule({ courses: [], meetings: [{ day: 'X' }] })).toThrow(/unexpected response/)
   })

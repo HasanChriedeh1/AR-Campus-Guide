@@ -8,6 +8,7 @@ import type {
   WebhookDay,
   WebhookMeeting,
 } from '../types'
+import { REMINDER_LEAD_MINUTES } from './classReminders'
 
 const scheduleUrl = import.meta.env.VITE_SCHEDULE_API_URL || '/api/schedule'
 const dayNames: Record<WebhookDay, DayName> = {
@@ -58,7 +59,12 @@ function validate(value: unknown): ScheduleWebhookResponse {
     || !Array.isArray(value.courses)
     || !value.courses.every(isWebhookCourse)
     || !Array.isArray(value.meetings)
-    || !value.meetings.every(isWebhookMeeting)) {
+    || !value.meetings.every(isWebhookMeeting)
+    || (value.reminderMinutesBefore !== undefined
+      && (typeof value.reminderMinutesBefore !== 'number'
+        || !Number.isInteger(value.reminderMinutesBefore)
+        || value.reminderMinutesBefore < 1
+        || value.reminderMinutesBefore > 60))) {
     throw new Error('The schedule service returned an unexpected response. Please try again.')
   }
   return value as ScheduleWebhookResponse
@@ -107,6 +113,7 @@ export function normalizeSchedule(value: unknown): ScheduleData {
   return {
     courses: response.courses.map(normalizeCourse),
     meetings: response.meetings.map(normalizeMeeting),
+    reminderMinutesBefore: response.reminderMinutesBefore ?? REMINDER_LEAD_MINUTES,
   }
 }
 

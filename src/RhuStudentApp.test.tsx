@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import RhuStudentApp from './RhuStudentApp'
+import { CAMPUS_DESTINATIONS } from './campusData'
 import { normalizeSchedule } from './services/scheduleApi'
 
 const webhookPayload = {
@@ -19,7 +20,15 @@ const authenticatedSession = {
 }
 
 beforeEach(() => {
+  const localValues = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    clear: () => localValues.clear(),
+    getItem: (key: string) => localValues.get(key) ?? null,
+    removeItem: (key: string) => localValues.delete(key),
+    setItem: (key: string, value: string) => localValues.set(key, value),
+  })
   sessionStorage.clear()
+  localStorage.clear()
   vi.stubGlobal('fetch', vi.fn())
 })
 
@@ -66,6 +75,7 @@ describe('RHU student experience', () => {
     renderAuthenticated()
     for (const label of ['Home', 'Nav', 'Classes', 'Menu']) expect(screen.getAllByRole('button', { name: label }).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: 'Edit schedule' })).toBeNull()
+    expect(screen.queryByText('10-minute class reminders')).toBeNull()
   })
 
   it('shows parsed read-only classes, conflicts, and the refresh reauthentication prompt', () => {
@@ -77,6 +87,19 @@ describe('RHU student experience', () => {
     expect(screen.getByText('Conflict')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Refresh schedule' }))
     expect(screen.getByRole('dialog', { name: 'Update your schedule' })).toBeTruthy()
+  })
+
+  it('advances empty class days to the next day with meetings and wraps to Monday', () => {
+    renderAuthenticated()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Classes' })[0])
+
+    fireEvent.click(screen.getByRole('tab', { name: /Tue/ }))
+    expect(screen.getByRole('tab', { name: /Thu/ }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('heading', { name: 'Thursday' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('tab', { name: /Fri/ }))
+    expect(screen.getByRole('tab', { name: /Mon/ }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('heading', { name: 'Monday' })).toBeTruthy()
   })
 
   it('refreshes directly with the password saved at sign-in', async () => {
@@ -103,20 +126,72 @@ describe('RHU student experience', () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/schedule', expect.objectContaining({ body: JSON.stringify({ Username: 'student-demo', Password: 'one-time-secret' }) })))
   })
 
-  it('provides five unselected photo destinations without implementation notes', () => {
+  it('provides six unselected photo destinations with their real coordinates', () => {
     renderAuthenticated()
     fireEvent.click(screen.getAllByRole('button', { name: 'Nav' })[0])
-    for (const label of ['Finance', 'Cafeteria', 'Block C', 'Library', 'Admissions']) {
+    for (const label of ['Finance', 'Cafeteria', 'Block C', 'Library', 'Admissions', "Student's Affairs"]) {
       expect(screen.getByRole('button', { name: new RegExp(label) }).getAttribute('aria-pressed')).toBe('false')
     }
     expect(screen.queryByRole('button', { name: /Block I/ })).toBeNull()
-    for (const image of ['Finance office', 'cafeteria building', 'Block C', 'RHU Library', 'Admissions Office']) expect(screen.getByRole('img', { name: new RegExp(image, 'i') })).toBeTruthy()
+    for (const image of ['Finance office', 'cafeteria building', 'Block C', 'RHU Library', 'Admissions Office', 'Student Affairs office']) expect(screen.getByRole('img', { name: new RegExp(image, 'i') })).toBeTruthy()
+    expect(Object.fromEntries(CAMPUS_DESTINATIONS.map(item => [item.id, item.coordinate]))).toEqual({
+      finance: { lat: 33.71375, lng: 35.48433333333333 },
+      cafeteria: { lat: 33.71349606857637, lng: 35.48392689194502 },
+      'block-c': { lat: 33.71447222222222, lng: 35.48391666666667 },
+      library: { lat: 33.71377777777778, lng: 35.48425 },
+      admissions: { lat: 33.71322673114103, lng: 35.48393880973027 },
+      'student-affairs': { lat: 33.71325, lng: 35.48386111111111 },
+    })
     expect(screen.queryByText(/custom coordinate/i)).toBeNull()
     expect(screen.queryByText(/Demo coordinate/)).toBeNull()
     expect(screen.queryByText('Selected destination')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: /Finance/ }))
+    expect(screen.getByRole('dialog', { name: 'Finance' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Finance' })).toBeTruthy()
+    expect(screen.getByText('Distance from you')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start Navigation' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start camera route' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Use live location' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start Navigation' }))
+    const liveNavigation = screen.getByRole('dialog', { name: 'Navigation to Finance' })
+    expect(liveNavigation.parentElement).toBe(document.body)
+    expect(document.documentElement.style.overflow).toBe('hidden')
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(document.body.style.position).toBe('fixed')
+
+    fireEvent.click(screen.getByRole('button', { name: 'End' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close destination details' }))
+    expect(document.documentElement.style.overflow).toBe('')
+    expect(document.body.style.overflow).toBe('')
+    expect(document.body.style.position).toBe('')
+  })
+
+  it('calculates the selected destination distance automatically', async () => {
+    const getCurrentPosition = vi.fn((success: PositionCallback) => success({
+      coords: {
+        accuracy: 5,
+        altitude: null,
+        altitudeAccuracy: null,
+        heading: null,
+        latitude: 33.71377777777778,
+        longitude: 35.48425,
+        speed: null,
+        toJSON: () => ({}),
+      },
+      timestamp: Date.now(),
+      toJSON: () => ({}),
+    }))
+    vi.stubGlobal('isSecureContext', true)
+    vi.stubGlobal('navigator', { ...navigator, geolocation: { getCurrentPosition } })
+
+    renderAuthenticated()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Nav' })[0])
+    fireEvent.click(screen.getByRole('button', { name: /Library/ }))
+
+    expect(getCurrentPosition).toHaveBeenCalledOnce()
+    expect(await screen.findByText('0.0 m')).toBeTruthy()
   })
 
   it('shows the cafeteria menu without exposing assistant setup notes', async () => {

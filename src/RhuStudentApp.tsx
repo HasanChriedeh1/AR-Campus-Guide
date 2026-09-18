@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowRight,
+  Bell,
   Bot,
   CalendarDays,
   CheckCircle2,
@@ -24,6 +25,13 @@ import {
 import { Guide } from './CampusMateApp'
 import { CAFETERIA_MENU, CAMPUS_DESTINATIONS, type MenuCategory } from './campusData'
 import { isChatConfigured, sendChatMessage } from './services/chatApi'
+import {
+  findDueClassReminder,
+  readDeliveredReminders,
+  saveDeliveredReminder,
+  showBrowserClassReminder,
+  type ClassReminder,
+} from './services/classReminders'
 import { fetchSchedule } from './services/scheduleApi'
 import type { DayName, ScheduleMeeting, StudentSession } from './types'
 import './rhu.css'
@@ -58,7 +66,16 @@ function readSession(): StudentSession | null {
       || !value.schedule
       || !Array.isArray(value.schedule.courses)
       || !Array.isArray(value.schedule.meetings)) return null
-    return value as StudentSession
+    const schedule = value.schedule as StudentSession['schedule']
+    return {
+      ...value,
+      schedule: {
+        ...schedule,
+        reminderMinutesBefore: Number.isInteger(schedule.reminderMinutesBefore)
+          ? schedule.reminderMinutesBefore
+          : 10,
+      },
+    } as StudentSession
   } catch {
     return null
   }
@@ -84,6 +101,20 @@ function readCredential(username: string) {
 function currentDay(): DayName | null {
   const name = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(new Date())
   return DAYS.includes(name as DayName) ? name as DayName : null
+}
+
+function findNextScheduledDay(meetings: ScheduleMeeting[], preferredDay: DayName | null = currentDay()): DayName {
+  const fallbackDay = preferredDay ?? 'Monday'
+  const scheduledDays = new Set(meetings.map(meeting => meeting.day))
+  if (!scheduledDays.size) return fallbackDay
+
+  const startIndex = preferredDay ? DAYS.indexOf(preferredDay) : 0
+  for (let offset = 0; offset < DAYS.length; offset += 1) {
+    const candidate = DAYS[(startIndex + offset) % DAYS.length]
+    if (scheduledDays.has(candidate)) return candidate
+  }
+
+  return fallbackDay
 }
 
 function formatMinutes(total: number) {
@@ -118,6 +149,23 @@ export default function RhuStudentApp() {
   const [refreshOpen, setRefreshOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState('')
+  const [classReminder, setClassReminder] = useState<ClassReminder | null>(null)
+
+  useEffect(() => {
+    if (!session) return
+    const delivered = readDeliveredReminders(session.username)
+    const checkForClass = () => {
+      const reminder = findDueClassReminder(session.schedule.meetings, delivered, new Date(), session.schedule.reminderMinutesBefore)
+      if (!reminder) return
+      delivered.add(reminder.id)
+      saveDeliveredReminder(session.username, reminder.id)
+      setClassReminder(reminder)
+      showBrowserClassReminder(reminder)
+    }
+    checkForClass()
+    const interval = window.setInterval(checkForClass, 15_000)
+    return () => window.clearInterval(interval)
+  }, [session])
 
   const saveSession = (next: StudentSession) => {
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(next))
@@ -157,6 +205,7 @@ export default function RhuStudentApp() {
     sessionStorage.removeItem(CREDENTIAL_KEY)
     sessionStorage.removeItem(CHAT_SESSION_KEY)
     setChatOpen(false)
+    setClassReminder(null)
     setRefreshOpen(false)
     setSession(null)
     setView('home')
@@ -199,7 +248,10 @@ export default function RhuStudentApp() {
         </div>
       </header>
 
-      <main className="rhu-main">{content}</main>
+      <main className="rhu-main">
+        {classReminder && <ClassReminderToast reminder={classReminder} dismiss={() => setClassReminder(null)} />}
+        {content}
+      </main>
 
       <nav className="rhu-mobile-tabs" aria-label="Primary navigation">
         {navigationItems.map(({ id, label, icon: Icon }) => (
@@ -221,6 +273,16 @@ export default function RhuStudentApp() {
         />
       )}
     </div>
+  )
+}
+
+function ClassReminderToast({ reminder, dismiss }: { reminder: ClassReminder; dismiss: () => void }) {
+  return (
+    <aside className="class-reminder-toast" role="status" aria-live="polite">
+      <span><Bell size={20} /></span>
+      <div><small>Class starts in {reminder.minutesUntilStart} minutes</small><strong>{reminder.meeting.code} · {reminder.meeting.title}</strong><p>{reminder.meeting.room ? `Room ${reminder.meeting.room}` : 'Room TBA'}</p></div>
+      <button type="button" onClick={dismiss} aria-label="Dismiss class reminder"><X size={18} /></button>
+    </aside>
   )
 }
 
@@ -265,7 +327,7 @@ function SignIn({ onAuthenticate }: { onAuthenticate: (username: string, passwor
         <h2>Sign in to continue</h2>
         <p>Use your RHU student credentials to securely retrieve your schedule.</p>
         <form onSubmit={submit} noValidate>
-          <label>Student ID<input autoComplete="username" inputMode="numeric" value={username} onChange={event => setUsername(event.target.value)} placeholder="Enter your student ID" autoFocus /></label>
+          <label>Student ID<input autoComplete="username" inputMode="numeric" value={username} onChange={event => setUsername(event.target.value)} placeholder="Enter your student ID" /></label>
           <label>Password<input type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} placeholder="Enter your password" /></label>
           {error && <div className="rhu-alert error" role="alert"><AlertTriangle size={18} />{error}</div>}
           <button className="rhu-primary sign-in-submit" disabled={loading || !username.trim() || !password}>
@@ -321,10 +383,10 @@ function HomeView({ session, go, openDestination }: { session: StudentSession; g
   )
 }
 
-function NavigationView({ selected, select, camera, setCamera }: { selected: typeof CAMPUS_DESTINATIONS[number] | null; select: (item: typeof CAMPUS_DESTINATIONS[number]) => void; camera: boolean; setCamera: (value: boolean) => void }) {
+function NavigationView({ selected, select, camera, setCamera }: { selected: typeof CAMPUS_DESTINATIONS[number] | null; select: (item: typeof CAMPUS_DESTINATIONS[number] | null) => void; camera: boolean; setCamera: (value: boolean) => void }) {
   return (
     <div className="rhu-view">
-      <PageHeading kicker="Campus navigation" title="Where do you want to go?" description="Choose a destination, then use live camera guidance to point you in the right direction." />
+      <PageHeading kicker="Campus navigation" title="Where do you want to go?" description="Tap a destination to see how far away it is and start navigation." />
       <div className="destination-grid">
         {CAMPUS_DESTINATIONS.map(item => (
           <button key={item.id} className={selected?.id === item.id ? 'selected' : ''} aria-pressed={selected?.id === item.id} onClick={() => select(item)}>
@@ -334,14 +396,14 @@ function NavigationView({ selected, select, camera, setCamera }: { selected: typ
           </button>
         ))}
       </div>
-      {selected && <Guide key={selected.id} destination={selected} camera={camera} setCamera={setCamera} />}
+      {selected && <Guide key={selected.id} destination={selected} camera={camera} setCamera={setCamera} presentation="modal" autoLocate onClose={() => select(null)} />}
     </div>
   )
 }
 
 function ClassesView({ session, requestRefresh, refreshing, refreshError }: { session: StudentSession; requestRefresh: () => void; refreshing: boolean; refreshError: string }) {
-  const initialDay = currentDay() ?? 'Monday'
-  const [day, setDay] = useState<DayName>(initialDay)
+  const [preferredDay, setPreferredDay] = useState<DayName>(() => currentDay() ?? 'Monday')
+  const day = findNextScheduledDay(session.schedule.meetings, preferredDay)
   const meetings = session.schedule.meetings.filter(meeting => meeting.day === day).sort((a, b) => a.startMinutes - b.startMinutes)
   const courseIssues = useMemo(() => new Map(session.schedule.courses.map(course => [course.code, course.issue])), [session.schedule.courses])
 
@@ -355,7 +417,7 @@ function ClassesView({ session, requestRefresh, refreshing, refreshError }: { se
       />
       {refreshError && <div className="rhu-alert error" role="alert"><AlertTriangle size={17} />{refreshError}</div>}
       <div className="day-tabs" role="tablist" aria-label="Class day">
-        {DAYS.map(item => <button role="tab" aria-selected={day === item} className={day === item ? 'active' : ''} key={item} onClick={() => setDay(item)}><span>{item.slice(0, 3)}</span><small>{session.schedule.meetings.filter(meeting => meeting.day === item).length}</small></button>)}
+        {DAYS.map(item => <button role="tab" aria-selected={day === item} className={day === item ? 'active' : ''} key={item} onClick={() => setPreferredDay(item)}><span>{item.slice(0, 3)}</span><small>{session.schedule.meetings.filter(meeting => meeting.day === item).length}</small></button>)}
       </div>
       <section className="classes-list" aria-label={`${day} classes`}>
         <div className="classes-day-heading"><div><span className="rhu-kicker">Selected day</span><h2>{day}</h2></div><span>{meetings.length} {meetings.length === 1 ? 'meeting' : 'meetings'}</span></div>

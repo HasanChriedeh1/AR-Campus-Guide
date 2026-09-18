@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ArrowRight, ArrowUp, Bot, CalendarDays, Camera, Check, ChevronDown, CircleAlert, Compass, CornerDownRight, Edit3, LayoutDashboard, LocateFixed, MapPin, Navigation, Plus, RefreshCw, RotateCcw, Send, Sparkles, Trash2, Volume2, VolumeX, X } from 'lucide-react'
 import type { DayName, Enrollment, Meeting, ScheduleResponse } from './types'
 import { bearingBetween, compassHeadingFromOrientation, distanceInMeters, formatDistance, getGuidanceCue, getNavigationGuidance, normalizeDegrees, signedRelativeBearing, smoothHeading, unwrapDegrees } from './navigation'
@@ -81,7 +82,16 @@ type DeviceOrientationConstructor = typeof DeviceOrientationEvent & {
   requestPermission?: (absolute?: boolean) => Promise<'granted' | 'denied'>
 }
 
-export function Guide({ destination: defaultDestination, camera, setCamera }: { destination: NavigationDestination; camera: boolean; setCamera: (value: boolean) => void }) {
+type GuideProps = {
+  destination: NavigationDestination
+  camera: boolean
+  setCamera: (value: boolean) => void
+  presentation?: 'inline' | 'modal'
+  onClose?: () => void
+  autoLocate?: boolean
+}
+
+export function Guide({ destination: defaultDestination, camera, setCamera, presentation = 'inline', onClose, autoLocate = false }: GuideProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const watchIdRef = useRef<number | null>(null)
   const locationPollRef = useRef<number | null>(null)
@@ -103,6 +113,7 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
   const lastSpokenAtRef = useRef(0)
   const announcedStartRef = useRef(false)
   const voiceEnabledRef = useRef(true)
+  const autoLocationRequestedRef = useRef(false)
   const [position, setPosition] = useState<LivePosition | null>(null)
   const [locationState, setLocationState] = useState<LocationState>('idle')
   const [locationError, setLocationError] = useState('')
@@ -358,6 +369,48 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
     )
   }, [reportLocationError, savePosition])
 
+  useEffect(() => {
+    if (!autoLocate || camera || autoLocationRequestedRef.current) return
+    autoLocationRequestedRef.current = true
+    requestSingleLocation()
+  }, [autoLocate, camera, requestSingleLocation])
+
+  useLayoutEffect(() => {
+    if (presentation !== 'modal') return
+    const root = document.documentElement
+    const scrollX = window.scrollX
+    const scrollY = window.scrollY
+    const previousRootOverflow = root.style.overflow
+    const previousRootOverscroll = root.style.overscrollBehavior
+    const previousOverflow = document.body.style.overflow
+    const previousPosition = document.body.style.position
+    const previousTop = document.body.style.top
+    const previousLeft = document.body.style.left
+    const previousWidth = document.body.style.width
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose?.()
+    }
+    root.style.overflow = 'hidden'
+    root.style.overscrollBehavior = 'none'
+    document.body.style.overflow = 'hidden'
+    document.body.style.position = 'fixed'
+    document.body.style.top = `-${scrollY}px`
+    document.body.style.left = `-${scrollX}px`
+    document.body.style.width = '100%'
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      root.style.overflow = previousRootOverflow
+      root.style.overscrollBehavior = previousRootOverscroll
+      document.body.style.overflow = previousOverflow
+      document.body.style.position = previousPosition
+      document.body.style.top = previousTop
+      document.body.style.left = previousLeft
+      document.body.style.width = previousWidth
+      if (window.scrollX !== scrollX || window.scrollY !== scrollY) window.scrollTo(scrollX, scrollY)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [onClose, presentation])
+
   const requestCompass = useCallback(async (session: number) => {
     stopCompassTracking()
     lastCompassSampleAtRef.current = 0
@@ -572,8 +625,8 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
   }
 
   if (camera) {
-    return (
-      <div className={`camera-route apple-navigation is-${precisionState} ${cameraError ? 'camera-unavailable' : ''}`}>
+    const cameraNavigation = (
+      <div className={`camera-route apple-navigation is-${precisionState} ${cameraError ? 'camera-unavailable' : ''}`} role="dialog" aria-modal="true" aria-label={`Navigation to ${destination.label}`}>
         <video ref={videoRef} autoPlay playsInline muted />
         <div className="camera-tint" />
         <header className="precision-header">
@@ -598,7 +651,7 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
             </div>
           )}
           <div className="precision-distance">
-            <strong>{arrived ? 'Here' : guidance ? formatDistance(guidance.distanceMeters) : '—'}</strong>
+            <strong>{arrived ? 'Here' : guidance ? formatDistance(guidance.distanceMeters) : 'Unavailable'}</strong>
             <span>{arrived ? 'Destination reached' : nearby ? 'Nearby' : turnLabel}</span>
           </div>
         </main>
@@ -619,6 +672,36 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
         </footer>
       </div>
     )
+    return createPortal(cameraNavigation, document.body)
+  }
+
+  if (presentation === 'modal') {
+    const distanceMessage = guidance
+      ? `${formatDistance(guidance.distanceMeters)} from your current location`
+      : locationState === 'acquiring'
+        ? 'Finding your current location…'
+        : locationError || 'Distance will appear when your location is available.'
+
+    const destinationModal = (
+      <div className="rhu-modal-backdrop guide-modal-backdrop" onClick={onClose}>
+        <section className="rhu-modal guide-destination-modal" role="dialog" aria-modal="true" aria-labelledby="guide-destination-title" onClick={event => event.stopPropagation()}>
+          <button className="modal-close-rhu guide-modal-close" type="button" aria-label="Close destination details" onClick={onClose}><X size={17} /></button>
+          <div className="guide-modal-photo"><img src={destination.imageSrc} alt={destination.imageAlt} /></div>
+          <div className="guide-modal-body">
+            <span className="rhu-kicker">Your destination</span>
+            <h2 id="guide-destination-title">{destination.label}</h2>
+            <p>{destination.description}</p>
+            <div className={`guide-modal-distance ${guidance ? 'has-distance' : ''}`} aria-live="polite">
+              <span className="guide-distance-icon">{locationState === 'acquiring' ? <RefreshCw className="spin" size={20} /> : <MapPin size={20} />}</span>
+              <span><small>Distance from you</small><strong>{guidance ? formatDistance(guidance.distanceMeters) : 'Unavailable'}</strong></span>
+            </div>
+            <p className={`guide-distance-status ${locationError ? 'has-error' : ''}`}>{distanceMessage}</p>
+            <button className="rhu-primary guide-start-button" type="button" onClick={startNavigation}><Navigation size={18} />Start Navigation</button>
+          </div>
+        </section>
+      </div>
+    )
+    return createPortal(destinationModal, document.body)
   }
 
   return (
@@ -634,8 +717,8 @@ export function Guide({ destination: defaultDestination, camera, setCamera }: { 
         <div><span className="guide-point destination-point"><MapPin size={16} /></span><small>{destination.label}</small></div>
       </div>
       <div className="guide-live-metrics">
-        <div><span>Distance</span><strong>{guidance ? formatDistance(guidance.distanceMeters) : '—'}</strong></div>
-        <div><span>Direction</span><strong>{guidance ? `${Math.round(guidance.bearing)}°` : '—'}</strong></div>
+        <div><span>Distance</span><strong>{guidance ? formatDistance(guidance.distanceMeters) : 'Unavailable'}</strong></div>
+        <div><span>Direction</span><strong>{guidance ? `${Math.round(guidance.bearing)}°` : 'Unavailable'}</strong></div>
         <div><span>Status</span><strong>{locationLabel}</strong></div>
       </div>
       {locationError && <div className="rhu-alert error" role="alert"><CircleAlert size={17} />{locationError}</div>}
