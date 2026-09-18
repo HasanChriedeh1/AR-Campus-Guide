@@ -1,0 +1,38 @@
+.route-arrow {
+  text-align: center;
+  transition: transform .35s cubic-bezier(.2, .8, .2, 1);
+}
+
+.route-arrow-ring {
+  width: 72px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d8ffbdcc;
+  border-radius: 50%;
+  background: #142318b8;
+  box-shadow: 0 0 0 8px #b5ef661c, 0 10px 32px #0008;
+}
+
+.route-arrow-ring svg {
+  filter: drop-shadow(0 0 8px #b5ef66);
+}
+
+.route-arrow-label {
+  display: block;
+  margin-top: 10px;
+  padding: 4px 8px;
+  border: 1px solid #ffffff2e;
+  border-radius: 99px;
+  color: #efffe7;
+  background: #07100bd9;
+  font: 9px var(--mono);
+  letter-spacing: .06em;
+}
+
+@media (max-width: 680px) {
+  .route-arrow-ring {
+    width: 64px;
+    height: 64px;
+  }
+}

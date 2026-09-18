@@ -3,6 +3,7 @@ import { ArrowRight, Bot, CalendarDays, Camera, ChevronDown, CircleAlert, Compas
 import { fetchSchedule } from './services/scheduleApi'
 import type { DayName, Enrollment, Meeting, ScheduleResponse } from './types'
 import './campus.css'
+import './campus-route.css'
 
 const DEMO: Enrollment[] = ['BIOM502','BIOM519','BIOM521','BIOM522','ECE595A','CCEE534','ENGR510'].map((course, index) => ({ course, section: index === 5 ? '2' : '1' }))
 const DAYS: DayName[] = ['Monday','Tuesday','Wednesday','Thursday','Friday']
@@ -39,7 +40,7 @@ export default function CampusMateApp() {
   const status = <Status loading={loading} error={error} retry={() => void load()} />
   const edit = (items: Enrollment[]) => setEnrollments(items.filter(item => item.course.trim()))
   const content = view === 'dashboard' ? <Dashboard meetings={meetings.filter(m => m.day === today())} next={next} loading={loading} error={error} retry={() => void load()} go={setView} /> : view === 'schedule' ? <Schedule meetings={meetings} day={day} setDay={setDay} select={setSelected} status={status} /> : view === 'edit' ? <Editor items={enrollments} original={original} onChange={edit} add={courses} setAdd={setCourses} save={() => void load()} restore={() => { edit(original); void load(original) }} status={status} /> : view === 'guide' ? <Guide destination={destination} setDestination={setDestination} camera={camera} setCamera={setCamera} /> : <Assistant />
-  return <div className="app-shell"><aside className="sidebar"><Brand /><div className="workspace-label">RHU / Fall 2026–27</div><nav>{nav.map(({ id, label, icon: Icon }) => <button className={`nav-item ${view === id ? 'active' : ''}`} key={id} onClick={() => setView(id)}><Icon size={18} />{label}{id === 'assistant' && <i className="soon-dot" />}</button>)}</nav><div className="sidebar-bottom"><div className="profile"><span className="avatar">SA</span><span><b>Student account</b><small>Demo profile</small></span><ChevronDown size={14} /></div><div className="api-status"><i className={`status-dot ${error ? 'offline' : ''}`} />Schedule API {error ? 'offline' : 'connected'}</div></div></aside><main><header className="topbar"><Brand compact /><div className="breadcrumbs"><span>Rafik Hariri University</span><CornerDownRight size={14} /><b>{nav.find(item => item.id === view)?.label}</b></div><span className="avatar mobile-avatar">SA</span></header><div className="page-wrap">{content}</div></main><nav className="mobile-nav">{nav.slice(0, 4).map(({ id, label, icon: Icon }) => <button className={view === id ? 'active' : ''} key={id} onClick={() => setView(id)}><Icon size={18} /><span>{label.replace('My ','').replace('Edit ','')}</span></button>)}</nav>{selected && <Modal meeting={selected} close={() => setSelected(null)} />}</div>
+  return <div className="app-shell"><aside className="sidebar"><Brand /><div className="workspace-label">RHU / Fall 2026–27</div><nav>{nav.map(({ id, label, icon: Icon }) => <button className={`nav-item ${view === id ? 'active' : ''}`} key={id} onClick={() => setView(id)}><Icon size={18} />{label}{id === 'assistant' && <i className="soon-dot" />}</button>)}</nav><div className="sidebar-bottom"><div className="profile"><span className="avatar">SA</span><span><b>Student account</b><small>Demo profile</small></span><ChevronDown size={14} /></div><div className="api-status"><i className={`status-dot ${error ? 'offline' : ''}`} />Schedule API {error ? 'offline' : 'connected'}</div></div></aside><main><header className="topbar"><Brand compact /><div className="breadcrumbs"><span>Rafik Hariri University</span><CornerDownRight size={14} /><b>{nav.find(item => item.id === view)?.label}</b></div><span className="avatar mobile-avatar">SA</span></header><div className="page-wrap">{content}</div></main><nav className="mobile-nav">{nav.slice(0, 4).map(({ id, icon: Icon }) => <button className={view === id ? 'active' : ''} key={id} onClick={() => setView(id)}><Icon size={18} /><span>{id === 'schedule' ? 'Schedule' : id === 'edit' ? 'Edit' : id === 'guide' ? 'Campus Guide' : 'Overview'}</span></button>)}</nav>{selected && <Modal meeting={selected} close={() => setSelected(null)} />}</div>
 }
 
 function Brand({ compact = false }: { compact?: boolean }) { return <div className={compact ? 'brand compact-brand' : 'brand'}><span className="brand-mark"><Sparkles size={16} /></span>Campus<span className="accent">Mate</span></div> }
@@ -51,12 +52,13 @@ function ScheduleBlock({ meeting, select }: { meeting: Meeting; select: (meeting
 function Editor({ items, original, onChange, add, setAdd, save, restore, status }: { items: Enrollment[]; original: Enrollment[]; onChange: (items: Enrollment[]) => void; add: Enrollment; setAdd: (item: Enrollment) => void; save: () => void; restore: () => void; status: React.ReactNode }) { return <div className="view"><Heading eyebrow="Personal planning tool" title={<>Shape your <em>week.</em></>} description="Adjust your plan without touching official registration." action={<button className="outline" onClick={restore}><RotateCcw size={15} />Restore original</button>} />{status}<div className="edit-layout"><section className="panel edit-list"><div className="panel-heading"><div><div className="section-label">PLANNING COURSES</div><h2>{items.length} <span>courses selected</span></h2></div><b className="badge">DEMO PROFILE</b></div>{items.map((item, index) => <div className="edit-row" key={`${item.course}-${index}`}><i className={`course-index ${color(item.course)}`}>{String(index + 1).padStart(2,'0')}</i><span><b>{item.course}</b><small>Demo enrollment</small></span><label>Section<input value={item.section} onChange={e => onChange(items.map((row, i) => i === index ? { ...row, section: e.target.value } : row))} /></label><button className="remove" onClick={() => onChange(items.filter((_, i) => i !== index))}><Trash2 size={15} /></button></div>)}<div className="add-row"><Plus size={16} /><input placeholder="Course code" value={add.course} onChange={e => setAdd({ ...add, course: e.target.value.toUpperCase() })} /><input className="section-input" placeholder="Sec." value={add.section} onChange={e => setAdd({ ...add, section: e.target.value })} /><button className="small-primary" onClick={() => { if (add.course.trim()) { onChange([...items, { course: add.course.trim(), section: add.section || '1' }]); setAdd({ course: '', section: '' }) } }}>Add</button></div><div className="edit-actions"><button className="primary" onClick={save}><RefreshCw size={15} />Generate updated timetable</button><span>Changes are saved locally for this demo.</span></div></section><aside className="edit-note"><CircleAlert size={18} /><h3>A planning layer, not registration.</h3><p>CampusMate sends course codes and sections to the existing schedule service to preview a personal timetable. It never changes official RHU enrollment.</p><hr /><strong>{original.length}</strong><small>original courses</small></aside></div></div> }
 function Guide({ destination, setDestination, camera, setCamera }: { destination: string; setDestination: (value: string) => void; camera: boolean; setCamera: (value: boolean) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const [position, setPosition] = useState(CAMPUS_POINTS.start)
-  const [locationState, setLocationState] = useState<'demo' | 'locating' | 'live' | 'unavailable'>('demo')
+  const [position, setPosition] = useState<GeoPoint | null>(null)
+  const [locationState, setLocationState] = useState<'locating' | 'live' | 'unavailable'>('locating')
   const [cameraError, setCameraError] = useState('')
+  const [heading, setHeading] = useState<number | null>(null)
   const destinationPoint = CAMPUS_POINTS.studentParking
-  const distance = distanceInMeters(position.lat, position.lng, destinationPoint.lat, destinationPoint.lng)
-  const bearing = bearingBetween(position.lat, position.lng, destinationPoint.lat, destinationPoint.lng)
+  const distance = position ? distanceInMeters(position.lat, position.lng, destinationPoint.lat, destinationPoint.lng) : null
+  const bearing = position ? bearingBetween(position.lat, position.lng, destinationPoint.lat, destinationPoint.lng) : 0
 
   useEffect(() => {
     if (!camera) return
@@ -73,20 +75,51 @@ function Guide({ destination, setDestination, camera, setCamera }: { destination
     return () => stream?.getTracks().forEach(track => track.stop())
   }, [camera])
 
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setLocationState('unavailable')
+      return
+    }
+
+    setLocationState('locating')
+    const watchId = navigator.geolocation.watchPosition(({ coords }) => {
+      setPosition({ label: 'Point C · Your current position', lat: coords.latitude, lng: coords.longitude })
+      setLocationState('live')
+    }, () => setLocationState('unavailable'), { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 })
+
+    const updateHeading = (event: DeviceOrientationEvent) => {
+      const compassHeading = (event as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading
+      const nextHeading = typeof compassHeading === 'number' ? compassHeading : typeof event.alpha === 'number' ? (360 - event.alpha) % 360 : null
+      if (nextHeading !== null) setHeading(nextHeading)
+    }
+    window.addEventListener('deviceorientationabsolute', updateHeading, true)
+    window.addEventListener('deviceorientation', updateHeading, true)
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId)
+      window.removeEventListener('deviceorientationabsolute', updateHeading, true)
+      window.removeEventListener('deviceorientation', updateHeading, true)
+    }
+  }, [])
+
   const locate = () => {
     if (!navigator.geolocation) { setLocationState('unavailable'); return }
     setLocationState('locating')
     navigator.geolocation.getCurrentPosition(({ coords }) => {
-      setPosition({ label: 'Your current position', lat: coords.latitude, lng: coords.longitude })
+      setPosition({ label: 'Point C · Your current position', lat: coords.latitude, lng: coords.longitude })
       setLocationState('live')
     }, () => setLocationState('unavailable'), { enableHighAccuracy: true, timeout: 8000 })
   }
 
-  if (camera) return <div className="camera-route"><video ref={videoRef} autoPlay playsInline muted /><div className="camera-tint" /><button className="camera-exit" onClick={() => setCamera(false)}><X size={17} />Exit navigation</button><div className="route-arrow" style={{ transform: `translateX(-50%) rotate(${bearing}deg)` }}><Navigation size={38} fill="currentColor" /></div><div className="camera-overlay"><div className="camera-status"><i className="live" />LIVE ROUTE / {locationState === 'live' ? 'GPS LOCKED' : 'COORDINATE PREVIEW'}</div><div className="route-readout"><div><b>{formatDistance(distance)}</b><span>to {destination}</span></div><div><b>{Math.round(bearing)}°</b><span>heading</span></div></div><p>{cameraError || 'Follow the marker toward your destination. Direction updates from your current position.'}</p><button className="outline light" onClick={() => setCamera(false)}>Back to route details</button></div></div>
+  if (camera) {
+    const relativeBearing = (bearing - (heading ?? 0) + 360) % 360
+    return <div className="camera-route"><video ref={videoRef} autoPlay playsInline muted /><div className="camera-tint" /><button className="camera-exit" onClick={() => setCamera(false)}><X size={17} />Exit navigation</button><div className="route-arrow" style={{ transform: `translate(-50%, -50%) rotate(${relativeBearing}deg)` }}><span className="route-arrow-ring"><Navigation size={28} fill="currentColor" /></span><span className="route-arrow-label">{Math.round(relativeBearing)}°</span></div><div className="camera-overlay"><div className="camera-status"><i className="live" />LIVE ROUTE / {locationState === 'live' ? 'GPS LOCKED' : 'WAITING FOR GPS'}</div><div className="route-readout"><div><b>{distance === null ? 'Locating...' : formatDistance(distance)}</b><span>to {destination}</span></div><div><b>{distance === null ? '--' : `${Math.round(relativeBearing)}°`}</b><span>{heading === null ? 'route heading' : 'turn from phone'}</span></div></div><p>{cameraError || (distance === null ? 'Waiting for your current position. Keep location enabled.' : 'Keep the marker centered ahead. Your position and direction update as you walk.')}</p><button className="outline light" onClick={() => setCamera(false)}>Back to route details</button></div></div>
+  }
 
-  return <div className="view"><div className="guide-hero route-hero"><div className="grid-pattern" /><div className="guide-copy"><div className="eyebrow light"><i />Campus Guide / Coordinates ready</div><h1>Point A<br /><em>to Point B.</em></h1><p>Follow a live route toward your selected campus destination with distance and heading updates.</p></div><div className="route-orbit"><Target size={24} /><span>A</span><i /><span>B</span></div></div><div className="route-summary"><div className="route-point"><span className="point-pin start-pin">A</span><div><small>STARTING POINT</small><b>{position.label}</b><em>{position.lat.toFixed(4)}, {position.lng.toFixed(4)}</em></div></div><ArrowRight className="route-line" size={18} /><div className="route-point"><span className="point-pin end-pin">B</span><div><small>DESTINATION</small><input value={destination} onChange={e => setDestination(e.target.value)} /><em>{destinationPoint.lat.toFixed(4)}, {destinationPoint.lng.toFixed(4)}</em></div></div></div><div className="route-metrics"><div><span>Distance</span><b>{formatDistance(distance)}</b></div><div><span>Direction</span><b>{Math.round(bearing)}°</b></div><div><span>Route status</span><b className={`location-state ${locationState}`}>{locationState === 'live' ? 'GPS locked' : locationState === 'locating' ? 'Locating...' : 'Preview mode'}</b></div></div><div className="route-actions"><button className="primary" onClick={() => { locate(); setCamera(true) }}><Camera size={15} />Start camera route <ArrowRight size={15} /></button><button className="outline" onClick={locate}><LocateFixed size={15} />{locationState === 'locating' ? 'Locating...' : 'Use my location'}</button></div><div className="footnote"><CircleAlert size={15} />Point A and Point B use predefined demo coordinates. Replace them with your real campus coordinates to test the route.</div></div>
+  return <div className="view"><div className="guide-hero route-hero"><div className="grid-pattern" /><div className="guide-copy"><div className="eyebrow light"><i />Campus Guide / Live location</div><h1>Point C<br /><em>to Point B.</em></h1><p>Your current phone position is Point C. Walk toward the predefined Student Parking destination at Point B.</p></div><div className="route-orbit"><Target size={24} /><span>C</span><i /><span>B</span></div></div><div className="route-summary"><div className="route-point"><span className="point-pin start-pin">C</span><div><small>YOUR CURRENT POSITION</small><b>{position ? position.label : 'Waiting for GPS...'}</b><em>{position ? `${position.lat.toFixed(4)}, ${position.lng.toFixed(4)}` : 'Allow location access to begin'}</em></div></div><ArrowRight className="route-line" size={18} /><div className="route-point"><span className="point-pin end-pin">B</span><div><small>DESTINATION</small><input value={destination} onChange={e => setDestination(e.target.value)} /><em>{destinationPoint.lat.toFixed(4)}, {destinationPoint.lng.toFixed(4)}</em></div></div></div><div className="route-metrics"><div><span>Distance</span><b>{distance === null ? 'Locating...' : formatDistance(distance)}</b></div><div><span>Direction</span><b>{distance === null ? '--' : `${Math.round(bearing)}°`}</b></div><div><span>Route status</span><b className={`location-state ${locationState}`}>{locationState === 'live' ? 'GPS locked' : locationState === 'locating' ? 'Locating...' : 'Unavailable'}</b></div></div><div className="route-actions"><button className="primary" onClick={() => { locate(); setCamera(true) }}><Camera size={15} />Start camera route <ArrowRight size={15} /></button><button className="outline" onClick={locate}><LocateFixed size={15} />{locationState === 'locating' ? 'Locating...' : 'Refresh location'}</button></div><div className="footnote"><CircleAlert size={15} />Point C is your live device location. Point B is the predefined Student Parking coordinate.</div></div>
 }
 
+type GeoPoint = { label: string; lat: number; lng: number }
 function distanceInMeters(lat1: number, lng1: number, lat2: number, lng2: number) { const radius = 6371000; const dLat = (lat2 - lat1) * Math.PI / 180; const dLng = (lng2 - lng1) * Math.PI / 180; const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2; return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) }
 function bearingBetween(lat1: number, lng1: number, lat2: number, lng2: number) { const y = Math.sin((lng2 - lng1) * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180); const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) - Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos((lng2 - lng1) * Math.PI / 180); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360 }
 function formatDistance(meters: number) { return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m` }

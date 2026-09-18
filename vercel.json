@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/schedule",
+      "destination": "https://batish53.app.n8n.cloud/webhook/Campus-Guide-Schedule"
+    }
+  ]
+}
